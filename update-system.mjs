@@ -75,6 +75,7 @@ const SYSTEM_PATHS = [
   'modes/da/',
   'modes/de/',
   'modes/fr/',
+  'modes/fr/interview/',
   'modes/es/',
   'modes/it/',
   'modes/ja/',
