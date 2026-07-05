@@ -849,6 +849,50 @@ if (updateSystemScript.includes("'CODEX.md'")) {
   fail('update-system does not preserve CODEX.md');
 }
 
+try {
+  const {
+    DASHBOARD_REBUILD_TIMEOUT_MS,
+    NPM_INSTALL_TIMEOUT_MS,
+    PLAYWRIGHT_INSTALL_TIMEOUT_MS,
+    REEXEC_BUFFER_TIMEOUT_MS,
+    UPDATE_PATH_CHECKOUT_BUDGET_MS,
+    gitTimeoutMs,
+    parsePositiveInt,
+    reexecTimeoutMs,
+  } = await import(pathToFileURL(join(ROOT, 'update-system.mjs')).href);
+  const fetchTimeout = gitTimeoutMs(['fetch']);
+  const gitCommandTimeout = gitTimeoutMs(['checkout']);
+  const updatePathCount = 100;
+  const minimumReexecBudget =
+    fetchTimeout +
+    gitCommandTimeout * 3 +
+    updatePathCount * UPDATE_PATH_CHECKOUT_BUDGET_MS +
+    NPM_INSTALL_TIMEOUT_MS +
+    PLAYWRIGHT_INSTALL_TIMEOUT_MS +
+    DASHBOARD_REBUILD_TIMEOUT_MS +
+    REEXEC_BUFFER_TIMEOUT_MS;
+
+  if (parsePositiveInt('42', 7) === 42 && parsePositiveInt('-1', 7) === 7 && parsePositiveInt('nope', 7) === 7) {
+    pass('update-system timeout parser accepts only positive integer overrides');
+  } else {
+    fail('update-system timeout parser does not preserve fallback semantics');
+  }
+
+  if (gitTimeoutMs(['fetch']) > gitTimeoutMs(['checkout'])) {
+    pass('update-system gives fetch a larger timeout than ordinary git commands');
+  } else {
+    fail('update-system fetch timeout is not larger than ordinary git command timeout');
+  }
+
+  if (reexecTimeoutMs(updatePathCount) >= minimumReexecBudget) {
+    pass('update-system sizes self-reexec timeout for downstream fetch/git/install/rebuild work');
+  } else {
+    fail('update-system self-reexec timeout budget is too small for downstream apply work');
+  }
+} catch (e) {
+  fail(`update-system timeout helper test crashed: ${e.message}`);
+}
+
 // ── 8. MODE FILE INTEGRITY ──────────────────────────────────────
 
 console.log('\n8. Mode file integrity');
