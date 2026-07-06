@@ -145,6 +145,7 @@ const SYSTEM_PATHS = [
   'analyze-patterns.mjs',
   'stats.mjs',
   'detect-reposts.mjs',
+  'fingerprint-core.mjs',
   'process-quality.mjs',
   'process-quality.test.mjs',
   'followup-cadence.mjs',
