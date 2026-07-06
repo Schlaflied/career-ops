@@ -5841,6 +5841,71 @@ try {
   fail(`_http.mjs error message tests crashed: ${e.message}`);
 }
 
+// ── 55. CORE↔WEB CONTRACT FREEZE ────────────────────────────────
+// The first-party web (web/) READS these exact core formats. This section
+// freezes each surface's canonical shape: a PR that changes a surface must
+// ALSO edit these assertions, which makes the change loud in the diff and
+// forces the web-coordination step (prefer ADDITIVE — append new columns/
+// statuses/blocks at the end; renaming, removing or reordering is BREAKING
+// and needs the web updated in lockstep).
+console.log('\n55. Core↔web contract freeze');
+try {
+  // 55.1 tracker header (tracker.mjs HEADER → web readApplications)
+  const trackerSrc = readFileSync(join(ROOT, 'tracker.mjs'), 'utf-8');
+  const CANONICAL_TRACKER_HEADER = '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |';
+  if (trackerSrc.includes(CANONICAL_TRACKER_HEADER)) {
+    pass('tracker.mjs writes the canonical 9-col applications.md header');
+  } else {
+    fail('tracker.mjs no longer writes the canonical 9-col header — BREAKING for the web reader; coordinate web/ in lockstep');
+  }
+
+  // 55.2 scan-history.tsv header prefix (scan.mjs → web whats-new + first_seen map)
+  const scanSrc = readFileSync(join(ROOT, 'scan.mjs'), 'utf-8');
+  const SCAN_HISTORY_PREFIX = 'url\\tfirst_seen\\tportal\\ttitle\\tcompany\\tstatus\\tlocation';
+  if (scanSrc.includes(SCAN_HISTORY_PREFIX)) {
+    pass('scan.mjs scan-history.tsv header keeps the canonical 7-col prefix (append-only beyond it)');
+  } else {
+    fail('scan.mjs scan-history.tsv header prefix changed — BREAKING for web readers; appending new columns at the END is the additive path');
+  }
+
+  // 55.3 canonical statuses (templates/states.yml → web status pills/actions)
+  const statesSrc = readFileSync(join(ROOT, 'templates', 'states.yml'), 'utf-8');
+  const CANONICAL_STATE_IDS = ['evaluated', 'applied', 'interview', 'offer', 'rejected', 'discarded'];
+  const missingStates = CANONICAL_STATE_IDS.filter((s) => !new RegExp(`^  - id: ${s}$`, 'm').test(statesSrc));
+  if (missingStates.length === 0) {
+    pass('templates/states.yml keeps every canonical status id (new ids may be appended)');
+  } else {
+    fail(`templates/states.yml lost canonical status id(s): ${missingStates.join(', ')} — BREAKING for the web status mapping`);
+  }
+
+  // 55.4 report format blocks (modes/oferta.md → web report parser)
+  const ofertaSrc = readFileSync(join(ROOT, 'modes', 'oferta.md'), 'utf-8');
+  const REPORT_BLOCKS = ['Block A', 'Block B', 'Block C', 'Block D', 'Block E', 'Block F', 'Block G'];
+  const missingBlocks = REPORT_BLOCKS.filter((b) => !ofertaSrc.includes(`## ${b} `));
+  if (missingBlocks.length === 0) {
+    pass('modes/oferta.md keeps the A-G report block structure (new blocks may be appended)');
+  } else {
+    fail(`modes/oferta.md lost report block(s): ${missingBlocks.join(', ')} — BREAKING for the web report view`);
+  }
+
+  // 55.5 cross-check: the web parser still speaks the same column names
+  const webParserPath = join(ROOT, 'web', 'src', 'lib', 'career-ops.ts');
+  if (existsSync(webParserPath)) {
+    const webSrc = readFileSync(webParserPath, 'utf-8');
+    const ESSENTIAL_COLS = ['Company', 'Role', 'Score', 'Status'];
+    const missingCols = ESSENTIAL_COLS.filter((c) => !webSrc.toLowerCase().includes(c.toLowerCase()));
+    if (missingCols.length === 0) {
+      pass('web/src/lib/career-ops.ts still references the essential tracker columns');
+    } else {
+      fail(`web parser no longer references column(s): ${missingCols.join(', ')} — core and web drifted`);
+    }
+  } else {
+    warn('web/src/lib/career-ops.ts not found — web layer moved? update contract freeze section');
+  }
+} catch (e) {
+  fail(`core↔web contract freeze section crashed: ${e.message}`);
+}
+
 console.log('\nTest layout guard (provider tests live in tests/providers/)');
 try {
   const src = readFileSync(join(ROOT, 'test-all.mjs'), 'utf-8');
