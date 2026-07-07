@@ -6008,6 +6008,48 @@ try {
   fail(`core↔web contract freeze section crashed: ${e.message}`);
 }
 
+// ── 55b. OFFER-PREP POSTURE FREEZE (#1634) ──────────────────────
+// offer-prep's value AND its legal safety rest on describe-never-judge.
+// This freezes that posture: if the mode text ever gains verdict language
+// or drops a hard guard, CI fails loudly instead of the drift shipping.
+console.log('\n55b. offer-prep posture freeze (#1634)');
+try {
+  const prepSrc = readFileSync(join(ROOT, 'modes', 'offer-prep.md'), 'utf-8');
+  // Hard guards that must remain present (as written rules, not promises)
+  const REQUIRED_GUARDS = [
+    'never outputs "safe to sign"',
+    'No online research',
+    'Never state law from memory',
+    'Never headless',
+    'Untrusted input',
+  ];
+  const missingGuards = REQUIRED_GUARDS.filter((g) => !prepSrc.includes(g));
+  if (missingGuards.length === 0) {
+    pass('offer-prep keeps all five hard guards in the mode text');
+  } else {
+    fail(`offer-prep lost hard guard(s): ${missingGuards.join(' · ')} — the describe-never-judge posture is the mode's contract`);
+  }
+  // Verdict vocabulary must not appear as INSTRUCTION (outside the guard
+  // sentences that ban it). Cheap heuristic: these phrases may only appear
+  // on lines that also contain "never"/"not"/"NOT" (i.e. the prohibitions).
+  const VERDICT_PHRASES = ['safe to sign', 'risky clause', 'red flag rating', 'severity score'];
+  const offending = [];
+  for (const line of prepSrc.split('\n')) {
+    for (const p of VERDICT_PHRASES) {
+      if (line.toLowerCase().includes(p) && !/never|not\b|no\b|prohibit|ban/i.test(line)) {
+        offending.push(`"${p}" outside a prohibition: ${line.trim().slice(0, 70)}`);
+      }
+    }
+  }
+  if (offending.length === 0) {
+    pass('offer-prep contains no verdict vocabulary outside prohibitions');
+  } else {
+    fail(`offer-prep verdict-drift: ${offending[0]}`);
+  }
+} catch (e) {
+  fail(`offer-prep posture freeze crashed: ${e.message}`);
+}
+
 console.log('\n56. Fingerprint core — JD cross-listing detection (#1597)');
 try {
   const { fingerprintText, similarity, findCrossListings, normalizeJdText, FINGERPRINT_MIN_TEXT } =
