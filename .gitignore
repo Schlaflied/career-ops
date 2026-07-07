@@ -8,6 +8,7 @@ data/scan-history.tsv
 data/scan-runs.tsv
 data/pdf-index.tsv
 data/agent-inbox.md
+data/reply-candidates.json
 data/parser-output/**/*.json
 !data/parser-output/.gitkeep
 !data/parser-output/**/.gitkeep
