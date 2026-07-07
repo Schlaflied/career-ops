@@ -21,10 +21,12 @@ The files below are the **ONLY** sources for user-facing content (CV, cover lett
 | writing-samples/ | `writing-samples/` | When generating candidate-facing text — check `_profile.md` for cached `## Writing Style` first; only scan files if absent |
 | voice-dna.md | `voice-dna.md` (project root, if exists) | When generating candidate-facing text. Anti-AI-slop guardrail + voice. See Voice DNA precedence below. |
 | interview-prep | `interview-prep/story-bank.md`, `interview-prep/{company}-{role}.md` | When generating ATS form answers / interview content — the user's own STAR stories + prep notes (same trust as cv.md). Consumed by `apply`/`match-star` + interview modes |
+| _custom.md | `modes/_custom.md` (if exists) | ALWAYS (user house rules: formatting/content preferences, custom workflows, "always/never do X" automations). Procedural rules only — never a content source for claims |
 
 **RULE: NEVER hardcode metrics from proof points.** Read them from cv.md + article-digest.md at evaluation time.
 **RULE: For article/project metrics, article-digest.md takes precedence over cv.md.**
 **RULE: Read _profile.md AFTER this file. User customizations in _profile.md override defaults here.**
+**RULE: Read _custom.md (if it exists) AFTER this file and honor its house rules in every mode.** It is where the user's persistent instructions live ("use this date format", "never reorder section X", "always include Y in summaries") — an instruction recorded there is NOT optional and does not expire between sessions or between items in a batch. When the user states a lasting preference in conversation, write it to `modes/_custom.md` so it survives the session.
 **RULE: NEVER claim the user authored a project, repo, library, tool, framework, or open-source artefact unless explicitly attributed to them in cv.md or article-digest.md.** Tool-of-trade conflation (user uses X → user built X) is the most common fabrication pattern and is forbidden.
 **RULE: Keywords get reformulated, never fabricated.** Reorder, reframe, emphasise — but never invent. If a claim isn't backed by an in-scope file, ask the user. If no answer, omit. Silence on a topic beats manufactured detail.
 

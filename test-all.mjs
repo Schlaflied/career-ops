@@ -968,6 +968,20 @@ if (shared.includes('_profile.md')) {
   fail('_shared.md does NOT reference _profile.md');
 }
 
+// --- _custom.md must be READ, not just written (#1388): Sources of Truth row +
+// honor rule in _shared.md, and an explicit pre-generation read in pdf.md ---
+const pdfModeCustom = readFile('modes/pdf.md');
+if (
+  shared.includes('| _custom.md | `modes/_custom.md` (if exists) |') &&
+  shared.includes('Read _custom.md (if it exists) AFTER this file and honor its house rules in every mode') &&
+  shared.includes('does not expire between sessions or between items in a batch') &&
+  pdfModeCustom.includes('read `modes/_custom.md` (if it exists) and apply its formatting/content house rules')
+) {
+  pass('_custom.md is wired into the read path: Sources of Truth row + honor rule in _shared.md + explicit read in pdf.md (#1388)');
+} else {
+  fail('_custom.md read-path regressed: missing Sources of Truth row, honor rule in _shared.md, or the pre-generation read in pdf.md (#1388 would reopen)');
+}
+
 for (const skillPath of ['.claude/skills/career-ops/SKILL.md', '.agents/skills/career-ops/SKILL.md']) {
   if (!fileExists(skillPath)) {
     fail(`${skillPath} is missing`);
