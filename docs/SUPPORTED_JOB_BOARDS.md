@@ -30,6 +30,7 @@ are shared helpers and are not loaded as providers.
 | Jobstreet / SEEK | API | Uses the public SEEK chalice-search JSON API for Jobstreet and SEEK sites. Configure explicitly with `provider: jobstreet`. |
 | JustJoin.it | API | Auto-detects `justjoin.it/job-offers/...` URLs and reads the public `justjoin.it/api/candidate-api/offers` API (Polish/EU tech board); paginates up to `max_pages` (default 50). |
 | Landing.jobs | API | Reads the board-wide `https://landing.jobs/api/v1/jobs` JSON feed (tech, Europe). Configure with `provider: landingjobs`; company is derived from the posting URL slug. |
+| LaraJobs | RSS | Reads the board-wide `https://larajobs.com/feed` RSS feed (Laravel / PHP jobs) and parses it in-process. Configure with `provider: larajobs`; company and location come from the feed's `job:` namespace. |
 | Lever | API | Auto-detects `https://jobs.(eu.)?lever.co/<slug>` boards and uses Lever's public postings endpoint. |
 | Local parser | Parser | Runs an in-repo parser command from `portals.yml`. Use this for stable SSR or HTML pages that need a custom extractor. |
 | No Fluff Jobs | API | Auto-detects `nofluffjobs.com` and reads its public `/api/search/posting` API (Polish/EU tech board); paginates up to `max_pages` (default 5). |
