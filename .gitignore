@@ -108,3 +108,6 @@ package-lock.json
 
 # Planning (local scratchpad)
 plan/
+
+# Web
+.career-ops-web/logo-cache/
