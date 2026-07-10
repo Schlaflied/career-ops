@@ -1316,12 +1316,12 @@ if (
 const claudeMdDoc = readFile('CLAUDE.md');
 const agentsMdDoc = readFile('AGENTS.md');
 if (
-  claudeMdDoc.includes('`offer-prep`') &&
+  /^@(?:\.\/)?AGENTS\.md/m.test(claudeMdDoc) &&
   agentsMdDoc.includes('`offer-prep`')
 ) {
-  pass('CLAUDE.md and AGENTS.md document the offer-prep mode');
+  pass('AGENTS.md documents offer-prep and CLAUDE.md imports it');
 } else {
-  fail('agent docs missing offer-prep mode row');
+  fail('AGENTS.md missing offer-prep mode row or CLAUDE.md is not importing AGENTS.md');
 }
 
 const dataContractDoc = readFile('DATA_CONTRACT.md');
@@ -2303,6 +2303,35 @@ if (
   pass('docs/CODEX.md is a complete Codex guide');
 } else {
   fail('docs/CODEX.md is missing required content');
+}
+
+const claudeWrapperLines = readFile('CLAUDE.md').trim().split(/\r?\n/);
+const claudeWrapperBody = claudeWrapperLines.slice(1).filter(line => line.trim());
+if (
+  claudeWrapperLines[0] === '@AGENTS.md' &&
+  claudeWrapperBody.length <= 1 &&
+  claudeWrapperBody.every(line => { const t = line.trim(); return t.startsWith('<!--') && t.endsWith('-->'); })
+) {
+  pass('CLAUDE.md is a thin AGENTS.md wrapper (#1088)');
+} else {
+  fail('CLAUDE.md must contain only @AGENTS.md plus an optional Claude-only placeholder comment (#1088)');
+}
+
+const criticalRoutingContracts = [
+  ['paste-a-JD auto-pipeline', /Pastes JD or URL\s*\|\s*auto-pipeline/],
+  ['PDF mode', /generate CV\/PDF\s*\|\s*`pdf`/i],
+  ['language modes_dir override', /language\.modes_dir:\s*modes\/(?:\{lang\}|de)/],
+  ['doctor --json onboarding', /node doctor\.mjs --json/],
+];
+for (const [name, marker] of criticalRoutingContracts) {
+  if (marker.test(agents)) pass(`AGENTS.md preserves ${name} routing for Claude`);
+  else fail(`AGENTS.md is missing ${name} routing required by the Claude wrapper`);
+}
+const claudeSkillEntrypoint = readFile('.claude/skills/career-ops/SKILL.md');
+if (/\.agents\/skills\/career-ops\/SKILL\.md/.test(claudeSkillEntrypoint) || claudeSkillEntrypoint === readFile('.agents/skills/career-ops/SKILL.md')) {
+  pass('Claude skill invocation resolves to the canonical career-ops router');
+} else {
+  fail('Claude skill invocation does not resolve to the canonical career-ops router');
 }
 
 // ── 12. SKILL SYMLINK INTEGRITY ─────────────────────────────
@@ -4945,16 +4974,18 @@ try {
 
   const claudeDoc = readFile('CLAUDE.md');
   const agentsDoc = readFile('AGENTS.md');
+  const claudeWrapperLines = claudeDoc.trim().split(/\r?\n/).filter(Boolean);
   if (
-    /node\s+doctor\.mjs\s+--json/.test(claudeDoc) &&
-    /"warnings"\s*:\s*\[\.\.\.\]/.test(claudeDoc) &&
-    /"autoCopied"\s*:\s*\[\.\.\.\]/.test(claudeDoc) &&
+    /node\s+doctor\.mjs\s+--json/.test(agentsDoc) &&
+    /"warnings"\s*:\s*\[\.\.\.\]/.test(agentsDoc) &&
     /"autoCopied"\s*:\s*\[\.\.\.\]/.test(agentsDoc) &&
+    claudeWrapperLines[0] === '@AGENTS.md' &&
+    claudeWrapperLines.length <= 8 &&
     !/Does\s+`cv\.md`\s+exist\?/i.test(claudeDoc)
   ) {
-    pass('CLAUDE.md and AGENTS.md delegate onboarding state and autoCopied to doctor --json');
+    pass('AGENTS.md delegates onboarding state and autoCopied to doctor --json; CLAUDE.md stays thin');
   } else {
-    fail('CLAUDE.md or AGENTS.md still duplicates onboarding prerequisite checks or misses autoCopied doc');
+    fail('AGENTS.md misses onboarding state docs or CLAUDE.md is not a thin wrapper');
   }
 } catch (e) {
   fail(`Cold-start trigger test crashed: ${e.message}`);
@@ -5944,12 +5975,18 @@ try {
     fail('modes/_custom.template.md is NOT in SYSTEM_PATHS — the seed never updates (#1198)');
   }
 
-  // CLAUDE.md MUST route custom rules to the file AND seed it on onboarding.
+  // AGENTS.md MUST route custom rules to the file AND seed it on onboarding.
+  // CLAUDE.md inherits this via its @AGENTS.md wrapper.
+  const agentsMd = readFileSync(join(ROOT, 'AGENTS.md'), 'utf-8');
   const claudeMd = readFileSync(join(ROOT, 'CLAUDE.md'), 'utf-8');
-  if (claudeMd.includes('modes/_custom.md') && claudeMd.includes('modes/_custom.template.md')) {
-    pass('CLAUDE.md routes custom rules to modes/_custom.md + seeds it from the template');
+  if (
+    agentsMd.includes('modes/_custom.md') &&
+    agentsMd.includes('modes/_custom.template.md') &&
+    claudeMd.trim().startsWith('@AGENTS.md')
+  ) {
+    pass('AGENTS.md routes custom rules to modes/_custom.md + CLAUDE.md inherits via wrapper');
   } else {
-    fail('CLAUDE.md does not reference modes/_custom.md / its template — agents will not use it (#1198)');
+    fail('AGENTS.md does not reference modes/_custom.md / its template, or CLAUDE.md does not inherit it (#1198)');
   }
 } catch (e) {
   fail(`custom instructions test crashed: ${e.message}`);
@@ -7128,10 +7165,10 @@ try {
   const claudeMdDoc = readFile('CLAUDE.md');
   const agentsMdDoc = readFile('AGENTS.md');
   const titlesRow = '| Wants to broaden the search with adjacent job titles suggested from the CV | `titles` |';
-  if (claudeMdDoc.includes('* `titles` —') && claudeMdDoc.includes(titlesRow)) {
-    pass('CLAUDE.md registers the titles subcommand and Skill Modes row');
+  if (/^@(?:\.\/)?AGENTS\.md/m.test(claudeMdDoc)) {
+    pass('CLAUDE.md imports AGENTS.md for titles documentation');
   } else {
-    fail('CLAUDE.md missing the titles subcommand bullet or Skill Modes row');
+    fail('CLAUDE.md does not import AGENTS.md for titles documentation');
   }
   if (agentsMdDoc.includes(titlesRow)) {
     pass('AGENTS.md registers the titles Skill Modes row');
