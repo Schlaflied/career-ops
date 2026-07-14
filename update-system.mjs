@@ -129,6 +129,7 @@ const SYSTEM_PATHS = [
   'patch-latex-content.mjs',
   'lib/latex-escape.mjs',
   'lib/latex-content.mjs',
+  'img-to-pdf.mjs',
   'archive-posting.mjs',
   'application-answers.mjs',
   'generate-cover-letter.mjs',
@@ -155,6 +156,7 @@ const SYSTEM_PATHS = [
   'classify-tier.mjs',
   'scan-ats-full.mjs',
   'match-star.mjs',
+  'jd-skill-gap.mjs',
   'prepare-application.mjs',
   'providers/',
   'seeds/',
@@ -174,6 +176,7 @@ const SYSTEM_PATHS = [
   'process-quality.test.mjs',
   'salary-gap.mjs',
   'funnel-velocity.mjs',
+  'assessment-log.mjs',
   'followup-cadence.mjs',
   'followup-cadence.test.mjs',
   'invite-match.mjs',
@@ -185,6 +188,8 @@ const SYSTEM_PATHS = [
   'ollama-eval.mjs',
   'openai-eval.mjs',
   'openai-tailor.mjs',
+  'eval-golden.mjs',
+  'evals/',
   'openrouter-runner.mjs',
   'test-all.mjs',
   'detect-reposts.test.mjs',
@@ -199,6 +204,8 @@ const SYSTEM_PATHS = [
   'reply-matcher.mjs',
   'reply-matcher.test.mjs',
   'reply-watch.mjs',
+  'paste-reply.mjs',
+  'paste-reply-tests.mjs',
   'batch/batch-prompt.md',
   'batch/batch-runner.sh',
   'batch/README.md',
@@ -223,6 +230,9 @@ const SYSTEM_PATHS = [
   'writing-samples/README.md',
   'VERSION',
   'DATA_CONTRACT.md',
+  'MANIFESTO.md',
+  'manifesto.mjs',
+  'SIGNATURES.md',
   'CONTRIBUTING.md',
   'MAINTAINERS.md',
   'ARCHITECTURE.md',
@@ -255,6 +265,10 @@ const SYSTEM_PATHS = [
   '.github/',
   'package.json',
   'build-cv-latex.mjs',
+  'build-cv-html.mjs',
+  'cv-templates.mjs',
+  'test/cv-templates.test.mjs',
+  'test/cover-resolver.test.mjs',
   'scaffolder/',
   'Dockerfile',
   'docker-compose.yml',
@@ -959,6 +973,11 @@ async function apply() {
     console.log(`\nUpdate complete: v${local} → v${remote}`);
     console.log(`Updated ${updated.length} system paths.`);
     console.log(`Rollback available: node update-system.mjs rollback`);
+
+    console.log('\n-- The CareerOps Manifesto ------------------------------');
+    console.log('A new way of job searching is taking shape. You are');
+    console.log('already practicing it. Read it, sign it if you want to help:');
+    console.log('    npm run manifesto  ·  https://career-ops.org/manifesto');
 
   } finally {
     // Remove lock

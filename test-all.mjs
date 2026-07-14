@@ -26,7 +26,7 @@
 
 import { execSync, execFileSync, spawn } from 'child_process';
 import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync, unlinkSync, realpathSync, symlinkSync } from 'fs';
-import { join, dirname, delimiter } from 'path';
+import { join, dirname, basename, delimiter } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { pass, fail, warn, run, fileExists, finish, ROOT, QUICK, NODE, getBash, toBashPath } from './tests/helpers.mjs';
@@ -48,6 +48,29 @@ function readFile(path) {
   }
   return content;
 }
+
+/**
+ * Normalize CRLF line endings to LF (#1771).
+ *
+ * On Windows checkouts with core.autocrlf=true, repo text files arrive with
+ * CRLF endings. Doc assertions that anchor on `\n` (JS `.` never matches `\r`)
+ * then fail on pristine main. Normalizing at read time keeps the assertions
+ * byte-ending agnostic without touching any regex.
+ *
+ * @param {string} text - Raw file contents.
+ * @returns {string} Contents with LF-only line endings.
+ */
+const normalizeEol = (text) => text.replace(/\r\n/g, '\n');
+
+/**
+ * Read a repo text file with line endings normalized to LF (#1771).
+ * Use for doc-content reads that feed `\n`-anchored regex assertions.
+ * Do NOT use where byte-exact content matters.
+ *
+ * @param {string} path - Path relative to the career-ops repository root.
+ * @returns {string} File contents with LF-only line endings.
+ */
+const readTextLF = (path) => normalizeEol(readFile(path));
 
 // ── Auto-discovered test files (issue #1440) ─────────────────────────────
 // Deterministic: recursive readdirSync with default lexicographic sort of
@@ -131,10 +154,15 @@ const scripts = [
   { name: 'process-quality.mjs --self-test', expectExit: 0 },
   { name: 'salary-gap.mjs --self-test', expectExit: 0 },
   { name: 'funnel-velocity.mjs --self-test', expectExit: 0 },
+  { name: 'img-to-pdf.mjs --self-test', expectExit: 0 },
+  { name: 'assessment-log.mjs --self-test', expectExit: 0 },
+  { name: 'build-cv-html.mjs --test', expectExit: 0 },
+  { name: 'jd-skill-gap.mjs --self-test', expectExit: 0 },
   { name: 'updater-migration-tests.mjs', expectExit: 0 },
   { name: 'tracker-columns-tests.mjs', expectExit: 0 },
   { name: 'agent-inbox-tests.mjs', expectExit: 0 },
   { name: 'followup-seed-tests.mjs', expectExit: 0 },
+  { name: 'paste-reply-tests.mjs', expectExit: 0 },
   { name: 'set-status-tests.mjs', expectExit: 0 },
   // Root-level standalone suites shipped in SYSTEM_PATHS but previously never
   // executed by CI (issue #1624). All are fast (<0.5s each), so they run in
@@ -716,6 +744,8 @@ const allowedFiles = [
   '.claude-plugin/marketplace.json', '.claude-plugin/plugin.json',
   // Community / governance files (added in v1.3.0, all legitimately reference the maintainer)
   'CODE_OF_CONDUCT.md', 'GOVERNANCE.md', 'SECURITY.md', 'SUPPORT.md',
+  // Manifesto: the author signs it publicly; the ledger carries signers' names by design
+  'MANIFESTO.md', 'SIGNATURES.md', '.github/PULL_REQUEST_TEMPLATE/sign-manifesto.md',
   '.github/SECURITY.md',
   // Dashboard credit string
   'dashboard/internal/ui/screens/pipeline.go',
@@ -949,6 +979,62 @@ try {
   fail(`PDF manifest path helper test crashed: ${e.message}`);
 }
 
+console.log('\n7b2. PDF renderer temporary-file cleanup');
+
+try {
+  const { renderHtmlToPdf } = await import(pathToFileURL(join(ROOT, 'generate-pdf.mjs')).href);
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'career-ops-pdf-cleanup-launch-'));
+  const launchError = new Error('injected browser launch failure');
+  let caught;
+  try {
+    await renderHtmlToPdf('<html><body>PII_MARKER@example.com</body></html>', join(fixtureRoot, 'cv.pdf'), {
+      baseDir: fixtureRoot,
+      launchBrowser: async () => { throw launchError; },
+    });
+  } catch (error) {
+    caught = error;
+  }
+  const leftovers = readdirSync(fixtureRoot)
+    .filter((name) => name.startsWith('.career-ops-render-'));
+  if (caught === launchError && leftovers.length === 0) {
+    pass('PDF renderer removes temporary HTML when Chromium launch fails');
+  } else {
+    fail(`PDF renderer leaked temporary HTML after launch failure: ${leftovers.join(', ')}`);
+  }
+  rmSync(fixtureRoot, { recursive: true, force: true });
+} catch (error) {
+  fail(`PDF renderer launch-cleanup test crashed: ${error.message}`);
+}
+
+try {
+  const { renderHtmlToPdf } = await import(pathToFileURL(join(ROOT, 'generate-pdf.mjs')).href);
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'career-ops-pdf-cleanup-page-'));
+  const pageError = new Error('injected newPage failure');
+  let closeCalls = 0;
+  let caught;
+  try {
+    await renderHtmlToPdf('<html><body>PRIVATE_CV_MARKER</body></html>', join(fixtureRoot, 'cv.pdf'), {
+      baseDir: fixtureRoot,
+      launchBrowser: async () => ({
+        newPage: async () => { throw pageError; },
+        close: async () => { closeCalls += 1; },
+      }),
+    });
+  } catch (error) {
+    caught = error;
+  }
+  const leftovers = readdirSync(fixtureRoot)
+    .filter((name) => name.startsWith('.career-ops-render-'));
+  if (caught === pageError && closeCalls === 1 && leftovers.length === 0) {
+    pass('PDF renderer closes Chromium and removes temporary HTML after launch');
+  } else {
+    fail(`PDF renderer post-launch cleanup mismatch: close=${closeCalls}, temp=${leftovers.join(', ')}`);
+  }
+  rmSync(fixtureRoot, { recursive: true, force: true });
+} catch (error) {
+  fail(`PDF renderer post-launch cleanup test crashed: ${error.message}`);
+}
+
 // ── 7c. UPDATER DASHBOARD REBUILD ─────────────────────────────────
 
 console.log('\n7c. Updater dashboard rebuild');
@@ -1020,16 +1106,45 @@ try {
 
 console.log('\n7d. Output language contract');
 
-const profileExample = readFile('config/profile.example.yml');
-const outputLanguageAgentsDoc = readFile('AGENTS.md');
-const outputLanguageClaudeDoc = readFile('CLAUDE.md');
-const careerOpsSkill = readFile('.agents/skills/career-ops/SKILL.md');
-const batchPrompt = readFile('batch/batch-prompt.md');
+const profileExample = readTextLF('config/profile.example.yml');
+const outputLanguageAgentsDoc = readTextLF('AGENTS.md');
+const outputLanguageClaudeDoc = readTextLF('CLAUDE.md');
+const careerOpsSkill = readTextLF('.agents/skills/career-ops/SKILL.md');
+const batchPrompt = readTextLF('batch/batch-prompt.md');
 
 if (/language:\s*\n(?:\s*#.*\n)*\s*output:\s*["']?en["']?/.test(profileExample)) {
   pass('profile.example.yml documents language.output default');
 } else {
   fail('profile.example.yml is missing language.output default');
+}
+
+// Regression guard (#1771): doc assertions must survive CRLF checkouts
+// (Windows core.autocrlf=true). Exercises the real read path: a CRLF fixture
+// is written to disk and read back through readTextLF, so stripping the
+// normalization out of readTextLF fails this check on every platform. The
+// fixture lives under ROOT because readFile resolves ROOT-relative paths.
+try {
+  const crlfGuardTmp = mkdtempSync(join(ROOT, 'crlf-guard-'));
+  try {
+    writeFileSync(
+      join(crlfGuardTmp, 'crlf-fixture.md'),
+      'language:\r\n  # Output language for human-facing prose\r\n  output: en\r\n\r\nWrite HTML to `output/cv-x.html`\r\n\r\n```bash\r\nnode generate-pdf.mjs \\\r\n  output/cv-x.html \\\r\n  output/cv-x.pdf\r\n```\r\n'
+    );
+    const crlfGuardContent = readTextLF(`${basename(crlfGuardTmp)}/crlf-fixture.md`);
+    if (
+      !crlfGuardContent.includes('\r') &&
+      /language:\s*\n(?:\s*#.*\n)*\s*output:\s*["']?en["']?/.test(crlfGuardContent) &&
+      crlfGuardContent.match(/node generate-pdf\.mjs \\\n\s+([^\s\\]+) \\/)?.[1] === 'output/cv-x.html'
+    ) {
+      pass('doc assertions tolerate CRLF checkouts via readTextLF normalization');
+    } else {
+      fail('doc assertions break on CRLF checkouts — readTextLF normalization regressed');
+    }
+  } finally {
+    rmSync(crlfGuardTmp, { recursive: true, force: true });
+  }
+} catch (e) {
+  fail(`CRLF regression guard crashed: ${e.message}`);
 }
 
 if (
@@ -1172,9 +1287,22 @@ if (shared.includes('_profile.md')) {
 // --- _custom.md must be READ, not just written (#1388): Sources of Truth row +
 // honor rule in _shared.md, and an explicit pre-generation read in pdf.md ---
 const pdfModeCustom = readFile('modes/pdf.md');
+const markersAppearInOrder = (text, markers) => {
+  let cursor = -1;
+  for (const marker of markers) {
+    const idx = text.indexOf(marker, cursor + 1);
+    if (idx === -1 || idx <= cursor) return false;
+    cursor = idx;
+  }
+  return true;
+};
 if (
   shared.includes('| _custom.md | `modes/_custom.md` (if exists) |') &&
-  shared.includes('Read _custom.md (if it exists) AFTER this file and honor its house rules in every mode') &&
+  markersAppearInOrder(shared, [
+    'Read _profile.md AFTER this file',
+    'Read _custom.md (if it exists) AFTER _profile.md',
+    'honor its house rules in every mode',
+  ]) &&
   shared.includes('does not expire between sessions or between items in a batch') &&
   pdfModeCustom.includes('read `modes/_custom.md` (if it exists) and apply its formatting/content house rules')
 ) {
@@ -1227,6 +1355,49 @@ if (
   pass('email mode covers formal drafts, no-send safety, variants, attachments, contact fields, and source boundaries');
 } else {
   fail('email mode missing required application-email behavior');
+}
+
+for (const skillPath of ['.claude/skills/career-ops/SKILL.md', '.agents/skills/career-ops/SKILL.md']) {
+  if (!fileExists(skillPath)) {
+    fail(`${skillPath} is missing`);
+    continue;
+  }
+  const skill = readFile(skillPath);
+  const sectionOrder = (sectionStart, sectionEnd, markers) => {
+    const start = skill.indexOf(sectionStart);
+    if (start === -1) return false;
+    const end = sectionEnd ? skill.indexOf(sectionEnd, start + sectionStart.length) : -1;
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    return markersAppearInOrder(section, markers);
+  };
+
+  const sharedModeOrder = sectionOrder(
+    '### Modes that require `_shared.md` + their mode file',
+    '### Standalone modes',
+    ['modes/_shared.md', 'modes/_profile.md', 'modes/_custom.md', 'modes/{mode}.md'],
+  );
+  const standaloneModeOrder = sectionOrder(
+    '### Standalone modes',
+    '### Modes delegated to subagent',
+    ['modes/_profile.md', 'modes/_custom.md', 'modes/{mode}.md'],
+  );
+  const delegatedModeOrder = sectionOrder(
+    '### Modes delegated to subagent',
+    'Execute the instructions from the loaded mode file.',
+    ['content of modes/_shared.md', 'content of modes/_profile.md if exists', 'content of modes/_custom.md if exists', 'content of modes/{mode}.md'],
+  );
+
+  if (
+    skill.includes('modes/_custom.md') &&
+    skill.includes('[content of modes/_custom.md if exists]') &&
+    sharedModeOrder &&
+    standaloneModeOrder &&
+    delegatedModeOrder
+  ) {
+    pass(`${skillPath} loads modes/_custom.md after _profile.md and before the selected mode for direct and delegated modes`);
+  } else {
+    fail(`${skillPath} does not load modes/_custom.md in the required _profile → _custom → mode order (#1388)`);
+  }
 }
 
 const applyMode = readFile('modes/apply.md');
@@ -1866,6 +2037,28 @@ if (
     pass('modes gate on data/blacklist.md before evaluation and form filling (#1742)');
   } else {
     fail('modes missing the data/blacklist.md gate (oferta/auto-pipeline/apply)');
+  }
+}
+
+// Opt-in CLI extractor wiring (#1449 Phase 2): every read-only JD-extraction
+// path must offer `browser-extract.mjs` behind `scan.extractor`, with a silent
+// MCP fallback — so the flag actually reaches the JD paths, not just scan/pipeline.
+{
+  const jdPathModes = ['modes/oferta.md', 'modes/auto-pipeline.md', 'modes/pipeline.md', 'modes/scan.md'];
+  const missing = jdPathModes.filter((m) => {
+    const src = readFile(m);
+    return !(src.includes('browser-extract.mjs') && src.includes('scan.extractor'));
+  });
+  if (missing.length === 0) {
+    pass('read-only JD paths wire the opt-in CLI extractor behind scan.extractor (#1449)');
+  } else {
+    fail(`JD paths missing browser-extract/scan.extractor wiring: ${missing.join(', ')}`);
+  }
+  // apply must stay on the MCP — the extractor is read-only and never fills forms.
+  if (!readFile('modes/apply.md').includes('browser-extract.mjs')) {
+    pass('apply mode does not route through the read-only extractor (#1449)');
+  } else {
+    fail('apply mode references browser-extract.mjs — the extractor must not touch the apply/form path');
   }
 }
 
@@ -4777,6 +4970,31 @@ try {
     fail('resolveScoreStatus should be undecidable for two statuses or two scores');
   }
 
+  // #1799: em dash / hyphen recognized as score-cell sentinels, matching the
+  // tracker's own "no data" convention used in every other column, alongside
+  // the pre-existing N/A / DUP sentinels — for backfilled no-score entries
+  // (e.g. a rejection email for a role never run through an evaluation).
+  if (looksLikeScoreCell('—') && looksLikeScoreCell('-')) {
+    pass('looksLikeScoreCell accepts em-dash and hyphen sentinels (#1799)');
+  } else {
+    fail('looksLikeScoreCell rejected the em-dash/hyphen sentinels');
+  }
+  const backfilled = resolveScoreStatus('—', 'Rejected');
+  const backfilledSwapped = resolveScoreStatus('Rejected', '—');
+  if (backfilled && backfilled.score === '—' && backfilled.status === 'Rejected' &&
+      backfilledSwapped && backfilledSwapped.score === '—' && backfilledSwapped.status === 'Rejected') {
+    pass('resolveScoreStatus resolves a backfilled em-dash score against a status in either order (#1799)');
+  } else {
+    fail(`resolveScoreStatus backfilled em-dash handling: std=${JSON.stringify(backfilled)} swp=${JSON.stringify(backfilledSwapped)}`);
+  }
+  // The #1427 guard must still refuse truly ambiguous rows: two sentinel-like
+  // cells give no way to tell score from status.
+  if (resolveScoreStatus('—', '-') === null && resolveScoreStatus('—', 'N/A') === null) {
+    pass('resolveScoreStatus still refuses two sentinel-like cells as ambiguous (#1427 guard intact)');
+  } else {
+    fail('resolveScoreStatus should stay undecidable for two sentinel-like cells');
+  }
+
   // End-to-end: a swapped-column TSV merges correctly; an undecidable one is skipped.
   const colTmp = mkdtempSync(join(tmpdir(), 'career-ops-colorder-'));
   try {
@@ -6362,14 +6580,31 @@ try {
   // CLAUDE.md inherits this via its @AGENTS.md wrapper.
   const agentsMd = readFileSync(join(ROOT, 'AGENTS.md'), 'utf-8');
   const claudeMd = readFileSync(join(ROOT, 'CLAUDE.md'), 'utf-8');
+  const sourceBoundaryStart = agentsMd.indexOf('## Source-of-Truth Boundary');
+  const sourceBoundaryEnd = agentsMd.indexOf('Anything not in this list', sourceBoundaryStart);
+  const sourceBoundary = agentsMd.slice(sourceBoundaryStart, sourceBoundaryEnd);
   if (
     agentsMd.includes('modes/_custom.md') &&
     agentsMd.includes('modes/_custom.template.md') &&
+    sourceBoundary.includes('modes/_custom.md') &&
+    sourceBoundary.includes('procedural/style rules only') &&
+    sourceBoundary.includes('never introduces factual claims') &&
     claudeMd.trim().startsWith('@AGENTS.md')
   ) {
-    pass('AGENTS.md routes custom rules to modes/_custom.md + CLAUDE.md inherits via wrapper');
+    pass('AGENTS.md routes procedural custom rules without making them factual sources + CLAUDE.md inherits via wrapper');
   } else {
-    fail('AGENTS.md does not reference modes/_custom.md / its template, or CLAUDE.md does not inherit it (#1198)');
+    fail('AGENTS.md custom-rule source boundary or CLAUDE.md inheritance is incomplete (#1198, #1736)');
+  }
+
+  const noUserData = readFileSync(join(ROOT, '.github/workflows/no-user-data.yml'), 'utf-8');
+  const guardedPaths = (noUserData.match(/const USER_PATHS = \[([\s\S]*?)\];/) || [, ''])[1];
+  if (
+    guardedPaths.includes('/^modes\\/_custom\\.md$/') &&
+    !guardedPaths.includes('/^voice-dna\\.md$/')
+  ) {
+    pass('no-user-data guard protects modes/_custom.md without treating voice-dna.md as user data');
+  } else {
+    fail('no-user-data guard has the wrong custom/user-layer paths (#1736)');
   }
 } catch (e) {
   fail(`custom instructions test crashed: ${e.message}`);
@@ -6400,6 +6635,30 @@ try {
   }
 } catch (e) {
   fail(`openrouter-runner portals drift guard crashed: ${e.message}`);
+}
+
+// ── 44b. openrouter-runner — prompt-cache breakpoint (#1709) ────
+console.log('\n44b. openrouter-runner — prompt-cache breakpoint (#1709)');
+try {
+  const { buildCachedSystemMessage } = await import(pathToFileURL(join(ROOT, 'openrouter-runner.mjs')).href);
+  const prefix = 'STATIC SYSTEM PREFIX — shared + profile + mode + cv';
+  const msg = buildCachedSystemMessage(prefix);
+  const block = msg?.content?.[0];
+  // The static prefix must ride as a structured content block carrying an
+  // ephemeral cache_control breakpoint, with the prompt text preserved verbatim
+  // (caching must never alter what the model reads).
+  if (
+    msg.role === 'system' &&
+    Array.isArray(msg.content) && msg.content.length === 1 &&
+    block.type === 'text' && block.text === prefix &&
+    block.cache_control && block.cache_control.type === 'ephemeral'
+  ) {
+    pass('buildCachedSystemMessage marks the static prefix with an ephemeral cache_control breakpoint, text unchanged (#1709)');
+  } else {
+    fail(`buildCachedSystemMessage shape wrong: ${JSON.stringify(msg)}`);
+  }
+} catch (e) {
+  fail(`openrouter-runner prompt-cache test crashed: ${e.message}`);
 }
 
 // ── 45. SCAN COOLDOWN FILTER ──────────────────────────────────
@@ -7685,6 +7944,84 @@ try {
   }
 } catch (e) {
   fail(`titles mode registration checks crashed: ${e.message}`);
+}
+
+console.log('\n59. CV template resolver (cv-templates.mjs)');
+{
+  const unit = run(NODE, ['--test', 'test/cv-templates.test.mjs']);
+  if (unit !== null) pass('cv-templates.mjs unit tests pass');
+  else fail('cv-templates.mjs unit tests failed (run: node --test test/cv-templates.test.mjs)');
+
+  const listed = run(NODE, ['cv-templates.mjs', 'list', 'cv']);
+  if (listed && listed.includes('"name"')) pass('CLI: list cv returns JSON');
+  else fail('CLI: list cv did not return JSON');
+
+  // Hermetic: point at a nonexistent profile so this exercises the unset -> base
+  // fallback regardless of the developer's real config/profile.yml (cv.template).
+  const noProfile = { env: { ...process.env, CAREER_OPS_PROFILE: join(tmpdir(), 'career-ops-no-such-profile.yml') } };
+  const resolved = run(NODE, ['cv-templates.mjs', 'resolve', 'cv'], noProfile);
+  if (resolved && resolved.endsWith('cv-template.html')) pass('CLI: resolve cv (unset) -> base template');
+  else fail(`CLI: resolve cv (unset) unexpected: ${resolved}`);
+}
+
+console.log('\n60. Cover-letter template resolver (generate-cover-letter.mjs)');
+{
+  const unit = run(NODE, ['--test', 'test/cover-resolver.test.mjs']);
+  if (unit !== null) pass('cover-resolver unit tests pass');
+  else fail('cover-resolver unit tests failed (run: node --test test/cover-resolver.test.mjs)');
+}
+
+// ── 61. INTERVIEW-PREP URL ENTRY (#1816) ────────────────────────
+// Prompt-level slice: prep for a role that was never evaluated. Pins the
+// disambiguation rule (bare URL still routes to auto-pipeline), the
+// report-stays-authoritative rule, the oferta fetch ladder, and the
+// read-only-on-the-pipeline scope guard.
+
+console.log('\n61. Interview-prep URL entry (#1816)');
+
+try {
+  const prepMode = readFile('modes/interview-prep.md');
+  // Whitespace-normalized view so pinned phrases survive markdown re-wrapping.
+  const prepFlat = prepMode.replace(/\s+/g, ' ');
+
+  if (prepMode.includes('## URL entry — prep for a role that was never evaluated')) {
+    pass('interview-prep mode has the URL entry section (#1816)');
+  } else {
+    fail('interview-prep mode missing the "URL entry — prep for a role that was never evaluated" section');
+  }
+
+  if (
+    prepFlat.includes('If a report DOES exist, ignore the URL fetch and use the report — the report stays authoritative') &&
+    prepFlat.includes('a bare URL routes to `auto-pipeline`, not here')
+  ) {
+    pass('interview-prep URL entry: report stays authoritative, bare URL still routes to auto-pipeline');
+  } else {
+    fail('interview-prep URL entry missing the report-stays-authoritative rule or the auto-pipeline disambiguation rule');
+  }
+
+  if (
+    prepMode.includes('browser_navigate') &&
+    prepMode.includes('browser_snapshot') &&
+    prepFlat.includes('WebFetch **only** as the headless/batch fallback') &&
+    prepMode.includes('**JD source:** unconfirmed (fetched without browser)') &&
+    prepMode.includes('Never fabricate JD content')
+  ) {
+    pass('interview-prep URL entry quotes the oferta fetch ladder (Playwright first, WebFetch fallback marks JD source unconfirmed)');
+  } else {
+    fail('interview-prep URL entry missing the canonical fetch ladder (browser_navigate/browser_snapshot first, marked WebFetch fallback, no fabricated JD)');
+  }
+
+  if (
+    prepFlat.includes('read-only on the pipeline') &&
+    prepMode.includes('`pdf` mode') &&
+    prepMode.includes('`contacto`')
+  ) {
+    pass('interview-prep URL entry scope guard: no tracker writes, CV generation stays in pdf, contact automation stays in contacto');
+  } else {
+    fail('interview-prep URL entry missing the out-of-scope guard (tracker read-only / pdf / contacto)');
+  }
+} catch (e) {
+  fail(`modes/interview-prep.md missing or unreadable: ${e.message}`);
 }
 
 console.log('\nTest layout guard (provider tests live in tests/providers/)');

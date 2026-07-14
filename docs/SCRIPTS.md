@@ -12,10 +12,11 @@ All scripts live in the project root as `.mjs` modules and are exposed via `npm 
 | `npm run dedup` | `dedup-tracker.mjs` | Remove duplicate tracker entries |
 | `npm run merge` | `merge-tracker.mjs` | Merge batch TSVs into applications.md |
 | `npm run pdf` | `generate-pdf.mjs` | Convert HTML to ATS-optimized PDF |
+| `npm run img-to-pdf` | `img-to-pdf.mjs` | Convert a single screenshot/image into a single-page PDF |
 | `npm run build:latex` | `build-cv-latex.mjs` | Build .tex from structured JSON payload |
 | `npm run sync-check` | `cv-sync-check.mjs` | Validate CV/profile consistency |
 | `npm run patterns` | `analyze-patterns.mjs` | Analyze tracker outcomes and report patterns |
-| `npm run upskill` | `upskill.mjs` | Aggregate skill-gap map from tracked reports |
+| `npm run upskill` | `upskill.mjs` | Aggregate skill-gap map from tracked reports (or `--url-text <url\|file>` for a single-JD targeted gap analysis) |
 | `npm run add` | `add-entry.mjs` | Dedup + insert a `/career-ops add` entry into cv.md / article-digest.md |
 | `npm run update:check` | `update-system.mjs check` | Check for upstream updates |
 | `npm run update` | `update-system.mjs apply` | Apply upstream update |
@@ -28,6 +29,8 @@ All scripts live in the project root as `.mjs` modules and are exposed via `npm 
 | `npm run tracker` | `tracker.mjs` | SQLite derived index over applications.md — sync/query/history/export |
 | `npm run find` | `find.mjs` | Resolve a report#/tracker#/company query to its full pipeline identity |
 | `npm run invite-match` | `invite-match.mjs` | Fuzzy-match a pasted interview-invite email against `data/applications.md` |
+| `npm run paste-reply` | `paste-reply.mjs` | Manual/no-Gmail input into the `reply-watch.mjs` classification pipeline |
+| `npm run openai:tailor` | `openai-tailor.mjs` | Tailor a CV via any OpenAI-compatible endpoint (headless companion to `openai-eval.mjs`) |
 
 ---
 
@@ -131,6 +134,22 @@ npm run pdf -- input.html output.pdf --format=a4        # A4 (default)
 
 ---
 
+## img-to-pdf
+
+Converts a single screenshot or image (PNG, JPEG, GIF, WEBP, BMP, SVG) into a single-page PDF via headless Chromium — for ATS upload fields that require a PDF specifically and reject images. Embeds the image as a base64 `data:` URI in a minimal HTML page and renders it with `page.pdf()`, sized to the image's own pixel dimensions so the page is neither cropped nor padded. Zero new dependencies — reuses the `playwright` dependency `generate-pdf.mjs` already uses, and is a deliberately standalone script: it does not go through `generate-pdf.mjs`, so it is never subject to that script's cv.md section-order validation.
+
+```bash
+npm run img-to-pdf -- screenshot.png output.pdf
+npm run img-to-pdf -- screenshot.png output.pdf --force   # overwrite an existing output file
+node img-to-pdf.mjs --self-test
+```
+
+MVP scope: one image in, one PDF page out. Multi-image/multi-page conversion is not implemented.
+
+**Exit codes:** `0` PDF generated, `1` missing arguments, unsupported image type, missing input file, existing output without `--force`, or generation failure.
+
+---
+
 ## build:latex
 
 Builds a `.tex` file from a structured JSON payload, handling template merge and LaTeX escaping automatically. The JSON is produced by the agent during evaluation — this script replaces the manual LaTeX generation step in `modes/latex.md`.
@@ -179,6 +198,8 @@ Aggregates skill gaps across every tracked report (#1520, phase 1). Extracts ski
 npm run upskill
 npm run upskill -- --summary
 npm run upskill -- --min-reports 3
+node upskill.mjs --url-text https://boards.greenhouse.io/acme/jobs/123   # targeted: gaps for one JD
+node upskill.mjs --url-text ./jds/my-job.txt                            # targeted: --url-text also takes a local file
 node upskill.mjs --self-test
 ```
 
@@ -230,6 +251,27 @@ Ledger line format (TSV, appended by `set-status.mjs`, `#`-prefixed lines are co
 `from` may be `-` (unknown prior state); `to` = `-` retracts the row's latest observation; a later `correction`-source line with the same (tracker#, to) replaces the earlier observation's date. Sources: set-status | correction | backfill | manual (only set-status/correction feed day-math).
 
 **Exit codes:** `0` always (missing tracker/ledger produce an explanatory empty result), `1` self-test or benchmarks-load failure.
+
+---
+
+## assessment-log
+
+Logs "received a skills assessment" as a structured per-application event (eSkill, HackerRank, Criteria, Predictive Index, ...) instead of burying it in free-text notes. Each event records platform, subject tested, pass threshold vs score achieved (both optional — vendors often hide them), and a candidate-observed staleness note (e.g. "test content references Adobe Acrobat 9, a 2008-era version"; empty = no staleness observed). Events append to `data/assessments.tsv` (user layer, created on first `add`, never rewritten). Aggregates count events, pass/fail (only when both threshold and score are known), and stale-flagged events per platform; malformed lines are always reported, never dropped silently.
+
+```bash
+node assessment-log.mjs add --company Acme --report 042 --platform eSkill --subject "MS Office" --threshold 70 --score 92 --stale "references Adobe Acrobat 9 (2008-era)"
+node assessment-log.mjs             # JSON
+node assessment-log.mjs --summary   # per-event + per-platform table
+node assessment-log.mjs --self-test
+```
+
+Log line format (TSV, one per line, `#`-prefixed lines are comments; for `report#`, `threshold%`, and `score%`, `-` or an absent trailing cell = unknown; an empty `stale_note` means no staleness was observed, not unknown):
+
+```text
+{YYYY-MM-DD}\t{company}\t{report#|-}\t{platform}\t{subject}\t{threshold%|-}\t{score%|-}\t{stale_note}
+```
+
+**Exit codes:** `0` success (a missing log produces an explanatory empty result), `1` invalid `add` arguments or self-test failure.
 
 ---
 
@@ -404,6 +446,30 @@ node find.mjs acme --json       # machine-readable output
 Multiple matches print as a table; zero matches print a clean message.
 
 **Exit codes:** `0` at least one match, `1` no match, missing query, or no `applications.md`.
+
+---
+
+## paste-reply
+
+Manual, no-Gmail input path into `reply-watch.mjs`'s classification pipeline (#1802). `reply-watch.mjs` already classifies employer replies and matches them to tracker rows, but its only input is `data/reply-candidates.json`, and the only planned way to populate that file is a Gmail scanner (#1583, unbuilt, requires OAuth inbox-read access). `paste-reply.mjs` normalizes a pasted (or file-provided) email's subject/from/body into the exact candidate shape `reply-watch.mjs` expects and appends it — existing candidates are never overwritten. It does not classify the reply itself (that stays `reply-watch.mjs`'s job) and never runs `reply-watch.mjs` or touches `data/applications.md`.
+
+```bash
+npm run paste-reply                    # interactive: prompts for subject, from, body
+node paste-reply.mjs --file email.txt  # read subject/from/body from a file
+```
+
+`--file` format (header lines optional, blank line separates headers from body):
+
+```text
+Subject: <subject line>
+From: <sender>
+
+<body text...>
+```
+
+If no `Subject:`/`From:` header lines are found, the whole file is treated as the body. After appending, run `node reply-watch.mjs` to classify the new candidate and review suggested tracker updates.
+
+**Exit codes:** `0` candidate appended, `1` missing `--file` argument, input file not found, or no subject/body text found.
 
 ---
 
