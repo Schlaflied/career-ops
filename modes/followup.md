@@ -40,6 +40,24 @@ If no actionable entries, tell the user:
 
 **Calibration cross-reference:** `node funnel-velocity.mjs --summary` reports which in-flight applications sit beyond the typical first-response window (its `waiting` block) — those rows are natural follow-up candidates; feed them into this cadence view rather than treating the wait itself as a verdict (silence past the window is common, not a rejection). When the user reports a status change here ("they replied", "rejected"), route it through `node set-status.mjs <report#> <state>` and pass `--on YYYY-MM-DD` when they name the real event day.
 
+## Step 1b — Employer Response-Latency Check
+
+Execute:
+
+```bash
+node rejection-latency.mjs
+```
+
+Parse the JSON output. It cross-references `data/active-interviews.md` interview dates with tracker rows still in `Interview` state and flags companies whose post-interview silence exceeds a **statutory** threshold (only `CA-ON: 45` days ships verified — Ontario ESA notification window) or the **courtesy** threshold (30-day default). If `flags` is empty, skip this step silently.
+
+For each entry in `flags`, surface one reminder line alongside the Step 2 dashboard:
+
+```text
+[Render in {language.output}: "⏳ {company} — {daysSinceLastInterview} days since your last interview ({lastInterviewDate}) with no recorded response. This {tier === 'statutory' ? 'exceeds the Ontario ESA 45-day notification window (elapsed-time observation only — not legal advice; employer size and posting type are not verifiable from the tracker)' : 'exceeds the {thresholdDays}-day courtesy threshold'}."]
+```
+
+If the user asks what to do about a flag, show the flag's ready-made `blacklistSuggestion` row and tell them ([Render in {language.output}]) they can copy it into `data/blacklist.md` themselves — this is a suggestion only. **Never write to `data/blacklist.md`, `data/applications.md`, or `data/active-interviews.md` from this step** (#1742 opt-in guarantee, same suggestion-only bridge as `modes/interview-redflag.md`). The two tiers are never conflated: only relay the statutory phrasing when the flag's `tier` is `statutory`.
+
 ## Step 2 — Display Dashboard
 
 Show a cadence dashboard sorted by urgency (urgent > overdue > waiting > cold):

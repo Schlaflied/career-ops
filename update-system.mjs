@@ -206,6 +206,7 @@ const SYSTEM_PATHS = [
   'process-quality.test.mjs',
   'company-history.mjs',
   'company-history.test.mjs',
+  'rejection-latency.mjs',
   'salary-gap.mjs',
   'funnel-velocity.mjs',
   'assessment-log.mjs',
