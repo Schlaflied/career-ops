@@ -190,6 +190,7 @@ const SYSTEM_PATHS = [
   'detect-reposts.mjs',
   'discover-ats.mjs',
   'discover-ats.test.mjs',
+  'check-table-freshness.mjs',
   'fingerprint-core.mjs',
   'process-quality.mjs',
   'process-quality.test.mjs',
