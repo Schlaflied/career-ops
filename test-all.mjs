@@ -4115,11 +4115,17 @@ try {
     "    notes: 'It''s a single-quoted note'",
     '    enabled: true',
     '',
+    '  - name: Commented Co',
+    '    careers_url: https://jobs.lever.co/commentedco',
+    '    notes: "Existing note" # do not remove this line',
+    '    enabled: true',
+    '',
   ].join('\n');
   const notesResults = [
     { name: 'Block Co', status: 'missing', ats: 'lever', slug: 'blockco', suggested: { ats: 'ashby', slug: 'block-ashby' } },
     { name: 'Quote Co', status: 'missing', ats: 'lever', slug: 'quoteco', suggested: { ats: 'ashby', slug: 'quote-ashby' } },
     { name: 'Single Co', status: 'missing', ats: 'lever', slug: 'singleco', suggested: { ats: 'ashby', slug: 'single-ashby' } },
+    { name: 'Commented Co', status: 'missing', ats: 'lever', slug: 'commentedco', suggested: { ats: 'ashby', slug: 'commented-ashby' } },
   ];
   const { text: notesText } = computeFixes(notesFixture, notesResults, { dateStr: '2026-07-09' });
   const notesParsed = yaml.load(notesText);
@@ -4129,11 +4135,47 @@ try {
     notesByName['Block Co'].notes.includes('Line two of notes.') &&
     notesByName['Block Co'].notes.includes('slug migrated lever->ashby 2026-07-09, verify-portals') &&
     notesByName['Quote Co'].notes === 'Some "quoted" unquoted text (slug migrated lever->ashby 2026-07-09, verify-portals)' &&
-    notesByName['Single Co'].notes === "It's a single-quoted note (slug migrated lever->ashby 2026-07-09, verify-portals)"
+    notesByName['Single Co'].notes === "It's a single-quoted note (slug migrated lever->ashby 2026-07-09, verify-portals)" &&
+    notesByName['Commented Co'].notes === 'Existing note (slug migrated lever->ashby 2026-07-09, verify-portals)'
   ) {
     pass('fix-slugs safely appends notes to block-scalar and quote-embedded values');
   } else {
     fail(`fix-slugs notes edge cases produced invalid/wrong content: ${JSON.stringify(notesByName)}`);
+  }
+
+  // A quoted notes value followed by a trailing `# comment` must keep that
+  // comment as a real YAML comment (outside the rewritten quoted scalar),
+  // not swallow it into the value — regression guard for the quote-type
+  // check running before the comment was split off.
+  if (notesText.includes('# do not remove this line')) {
+    pass('fix-slugs preserves a trailing inline comment on a quoted notes value');
+  } else {
+    fail(`fix-slugs lost the trailing comment on Commented Co's notes line: ${JSON.stringify(notesText)}`);
+  }
+
+  // Regression guard: when `api:` already exists and is rewritten in place
+  // (not newly inserted), a subsequently-inserted `notes:` field must land
+  // AFTER it, not before it — `insertAfter` has to advance to the existing
+  // api line's position, not stay pinned at careers_url.
+  const apiOrderFixture = [
+    'tracked_companies:',
+    '',
+    '  - name: Renamed GH Co',
+    '    careers_url: https://job-boards.greenhouse.io/oldslug',
+    '    api: https://boards-api.greenhouse.io/v1/boards/oldslug/jobs',
+    '    enabled: true',
+    '',
+  ].join('\n');
+  const apiOrderResults = [
+    { name: 'Renamed GH Co', status: 'missing', ats: 'greenhouse', slug: 'oldslug', suggested: { ats: 'greenhouse', slug: 'newslug' } },
+  ];
+  const { text: apiOrderText } = computeFixes(apiOrderFixture, apiOrderResults, { dateStr: '2026-07-09' });
+  const apiLineIdx = apiOrderText.split('\n').findIndex((l) => l.trim().startsWith('api:'));
+  const notesLineIdx = apiOrderText.split('\n').findIndex((l) => l.trim().startsWith('notes:'));
+  if (apiLineIdx !== -1 && notesLineIdx !== -1 && notesLineIdx > apiLineIdx) {
+    pass('fix-slugs inserts a new notes field after an existing rewritten-in-place api field');
+  } else {
+    fail(`fix-slugs inserted notes before the existing api field: ${JSON.stringify(apiOrderText)}`);
   }
 
   // --dry-run must never mutate the file: computeFixes is pure (it only

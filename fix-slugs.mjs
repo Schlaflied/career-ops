@@ -158,22 +158,46 @@ function appendNote(lines, block, notesLine, fieldIndent, note) {
     return;
   }
 
+  // A trailing inline comment must be split off BEFORE the quote-type check —
+  // otherwise a quoted value followed by `# comment` doesn't end with the
+  // closing quote character and falls through to the unquoted branch, which
+  // escapes the comment text itself into the value instead of leaving it as
+  // a real YAML comment.
+  const doubleQuotedRe = /^"((?:[^"\\]|\\.)*)"[ \t]*(#.*)?$/;
+  const singleQuotedRe = /^'((?:[^']|'')*)'[ \t]*(#.*)?$/;
+
   let inner;
-  if (afterKey.length >= 2 && afterKey.startsWith('"') && afterKey.endsWith('"')) {
+  let comment = '';
+  const dq = afterKey.match(doubleQuotedRe);
+  const sq = !dq && afterKey.match(singleQuotedRe);
+  if (dq) {
     // Already double-quoted: the content between the quotes is already valid
     // double-quoted-scalar text (any embedded `"`/`\` is already escaped) —
     // reuse it verbatim rather than re-escaping already-escaped sequences.
-    inner = afterKey.slice(1, -1);
-  } else if (afterKey.length >= 2 && afterKey.startsWith("'") && afterKey.endsWith("'")) {
+    inner = dq[1];
+    comment = dq[2] || '';
+  } else if (sq) {
     // Single-quoted YAML escapes a literal `'` as `''` — undo that, then
     // escape for the double-quoted scalar we're about to produce.
-    inner = escapeForDoubleQuoted(afterKey.slice(1, -1).replace(/''/g, "'"));
+    inner = escapeForDoubleQuoted(sq[1].replace(/''/g, "'"));
+    comment = sq[2] || '';
   } else {
     // Unquoted plain scalar — may itself contain unescaped `"` or `\`
-    // characters that would break a naive re-wrap.
-    inner = escapeForDoubleQuoted(afterKey);
+    // characters that would break a naive re-wrap, and may carry its own
+    // trailing `# comment` (a YAML comment must start at the line or be
+    // preceded by whitespace, so scan for the first such `#`).
+    let hashIdx = -1;
+    for (let i = 0; i < afterKey.length; i++) {
+      if (afterKey[i] === '#' && (i === 0 || /\s/.test(afterKey[i - 1]))) {
+        hashIdx = i;
+        break;
+      }
+    }
+    const value = hashIdx === -1 ? afterKey : afterKey.slice(0, hashIdx).trimEnd();
+    comment = hashIdx === -1 ? '' : afterKey.slice(hashIdx);
+    inner = escapeForDoubleQuoted(value);
   }
-  lines[notesLine] = `${fieldIndent}notes: "${inner} ${note}"`;
+  lines[notesLine] = `${fieldIndent}notes: "${inner} ${note}"${comment ? ` ${comment}` : ''}`;
 }
 
 /**
@@ -205,6 +229,7 @@ function applyFix(lines, block, suggested, oldAts, dateStr) {
   if (api) {
     if (apiLine !== -1) {
       lines[apiLine] = `${fieldIndent}api: ${api}`;
+      insertAfter = Math.max(insertAfter, apiLine);
     } else {
       lines.splice(insertAfter + 1, 0, `${fieldIndent}api: ${api}`);
       block.endLine += 1;
