@@ -111,6 +111,7 @@ const SYSTEM_PATHS = [
   'modes/es/interview/',
   'modes/id/',
   'modes/it/',
+  'modes/it/interview/',
   'modes/ja/',
   'modes/ko/',
   'modes/nl/',
@@ -168,11 +169,15 @@ const SYSTEM_PATHS = [
   'reserve-report-num.mjs',
   'scan.mjs',
   'pipeline-lock.mjs',
+  'portal-health-lock.mjs',
   'classify-tier.mjs',
   'scan-ats-full.mjs',
+  'scan-interamt.mjs',
+  'company-funded.mjs',
   'match-star.mjs',
   'jd-skill-gap.mjs',
   'prepare-application.mjs',
+  'application-artifacts.mjs',
   'providers/',
   'seeds/',
   'tests/',
@@ -189,6 +194,7 @@ const SYSTEM_PATHS = [
   'detect-reposts.mjs',
   'discover-ats.mjs',
   'discover-ats.test.mjs',
+  'check-table-freshness.mjs',
   'fingerprint-core.mjs',
   'process-quality.mjs',
   'process-quality.test.mjs',
@@ -215,6 +221,8 @@ const SYSTEM_PATHS = [
   'eval-golden.mjs',
   'evals/',
   'openrouter-runner.mjs',
+  'jd-similarity.mjs',
+  'jd-similarity.test.mjs',
   'test-all.mjs',
   'detect-reposts.test.mjs',
   'test-salary-filter.mjs',
@@ -224,6 +232,7 @@ const SYSTEM_PATHS = [
   'agent-inbox-tests.mjs',
   'validate-portals.mjs',
   'verify-portals.mjs',
+  'fix-slugs.mjs',
   'updater-migration-tests.mjs',
   'validate-system-paths-coverage.mjs',
   'reply-matcher.mjs',
@@ -1176,7 +1185,7 @@ async function apply() {
 
       if (commitFailed) {
         const allTargetPaths = [...pathsToStage, ...materializedSkillEntrypoints];
-        const pathspec = allTargetPaths.map(p => `"${p}"`).join(' ');
+        const pathspec = allTargetPaths.map(p => `'${p.replace(/'/g, "'\\''")}'`).join(' ');
         throw new Error(
           `Update commit failed (files may be staged but not committed).\n` +
           `    Error: ${e.message.split('\n')[0]}\n` +
