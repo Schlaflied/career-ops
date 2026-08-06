@@ -2442,6 +2442,11 @@ if (
       const on = pt?.jurisdictions?.['CA-ON'];
       const isNonEmptyStringArray = (v) => Array.isArray(v) && v.length > 0 && v.every((s) => typeof s === 'string' && s.length > 0);
       const effectiveStr = on?.effective instanceof Date ? on.effective.toISOString().slice(0, 10) : on?.effective;
+      // check-table-freshness.mjs's discovery/parsing contract requires as_of to be a
+      // quoted "YYYY-MM-DD" string — a bare/unquoted YAML date is auto-parsed by js-yaml
+      // into a Date object, which parseDate() there stringifies to a non-ISO form and
+      // rejects as malformed (row skipped with a warning, never silently trusted).
+      const isValidAsOfString = typeof on?.as_of === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(on.as_of);
       if (
         on &&
         on.range_required === true &&
@@ -2451,11 +2456,12 @@ if (
         isNonEmptyStringArray(on.exemptions) &&
         typeof on.legal_basis === 'string' && on.legal_basis.includes('476/24') &&
         effectiveStr === '2026-01-01' &&
-        isNonEmptyStringArray(on.sources)
+        isNonEmptyStringArray(on.sources) &&
+        isValidAsOfString
       ) {
-        pass('pay-transparency.yml parses and CA-ON seed carries width_cap (incl. year period)/exemptions/legal_basis/effective 2026-01-01/sources (#2019)');
+        pass('pay-transparency.yml parses and CA-ON seed carries width_cap (incl. year period)/exemptions/legal_basis/effective 2026-01-01/sources/as_of quoted YYYY-MM-DD (#2019)');
       } else {
-        fail('pay-transparency.yml CA-ON seed incomplete — needs range_required, width_cap 50000 CAD/year, non-empty string-array exemptions, legal_basis (O. Reg. 476/24), effective 2026-01-01, non-empty string-array sources (#2019)');
+        fail(`pay-transparency.yml CA-ON seed incomplete — needs range_required, width_cap 50000 CAD/year, non-empty string-array exemptions, legal_basis (O. Reg. 476/24), effective 2026-01-01, non-empty string-array sources, and as_of as a quoted YYYY-MM-DD string matching the check-table-freshness.mjs discovery contract (got as_of=${JSON.stringify(on?.as_of ?? null)}, type=${on?.as_of instanceof Date ? 'Date (unquoted YAML date — must be quoted)' : typeof on?.as_of}) (#2019)`);
       }
     } catch (e) {
       fail(`templates/pay-transparency.yml does not parse as YAML: ${e.message} (#2019)`);
