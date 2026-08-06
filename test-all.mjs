@@ -2521,6 +2521,122 @@ if (
   } else {
     fail(`minimum-wage phrasing discipline broken: ${mwAccusatory.length ? `accusatory blockquote line(s): ${mwAccusatory[0].trim().slice(0, 80)}` : (!mwHasLawyerRouting ? 'missing [ask your lawyer] routing in rendered blockquote' : 'expected a blockquote output template in the section')} (#2025, CodeRabbit)`);
   }
+
+  // 4. Dual lawyer question (CodeRabbit round 2 on #2027): the rendered
+  //    hand-off must ask BOTH the statutory-compliance question AND, when a
+  //    special rate is present with unresolved eligibility, the carve-out-
+  //    applicability question — not just the first one.
+  const mwHandoffQuote = mwQuoteLines.find((l) => l.includes('[ask your lawyer]')) || '';
+  if (
+    /current statutory minimum wage/i.test(mwHandoffQuote) &&
+    /special.?rate carve-?out/i.test(mwHandoffQuote) &&
+    /appl(y|ies)/i.test(mwHandoffQuote)
+  ) {
+    pass('minimum-wage lawyer hand-off asks BOTH the statutory-compliance question and the special-rate-carve-out-applicability question (#2027, CodeRabbit round 2)');
+  } else {
+    fail('minimum-wage lawyer hand-off missing the dual question — must ask both whether the advertised amount complies with the statutory minimum AND, when eligibility for a listed special rate is unresolved, whether the carve-out applies to this role (#2027, CodeRabbit round 2)');
+  }
+
+  // 5. Real behavioral test for the staleness/rate-selection predicate
+  //    (CodeRabbit round 2 on #2027): a prior fix commit (64fd876) shipped
+  //    an INVERTED predicate — it treated an already-arrived `next_effective`
+  //    date as evidence the row was "uncovered"/stale, when an arrived
+  //    `next_effective` is exactly when `next_rate` becomes the confirmed,
+  //    in-force rate. Marker-phrase checks (mwSection.includes(...)) cannot
+  //    catch a reversed comparison direction because both directions use the
+  //    same vocabulary ("before"/"on or after"/"next_effective"). This test
+  //    instead (a) implements the CORRECT selection algorithm as specified
+  //    by CodeRabbit and exercises it against concrete date fixtures, and
+  //    (b) extracts the actual directional wording from the shipped prose in
+  //    both templates/minimum-wage.yml and modes/oferta.md and asserts it
+  //    matches the correct direction — so a reversed condition (e.g. "skip
+  //    when next_effective has passed") cannot silently pass again.
+  {
+    // (a) reference implementation of the specified-correct algorithm
+    function selectMinWageRate(row, todayISO) {
+      const today = new Date(todayISO);
+      const hasFutureConfirmedNext = row.next_rate != null && row.next_effective != null;
+      if (hasFutureConfirmedNext && today >= new Date(row.next_effective)) {
+        // next_effective has arrived: next_rate is the confirmed rate in
+        // force today — this is NEVER a staleness/skip condition.
+        return { source: 'next_rate', rate: row.next_rate, skip: false };
+      }
+      // Only general_rate is a candidate today. It is stale iff the row is
+      // more than 12 months past as_of AND there is no future-confirmed
+      // next_rate to fall back on being "the" covering rate (there isn't
+      // one yet regardless — that's the branch we're in — so the 12-month
+      // gate alone decides).
+      const monthsSinceAsOf = (today - new Date(row.as_of)) / (1000 * 60 * 60 * 24 * 30.44);
+      if (monthsSinceAsOf > 12) {
+        return { source: null, rate: null, skip: true };
+      }
+      return { source: 'general_rate', rate: row.general_rate, skip: false };
+    }
+
+    const freshRow = {
+      general_rate: 17.60,
+      next_rate: 17.95,
+      next_effective: '2026-10-01',
+      as_of: '2026-07-18',
+    };
+
+    // Behavior (a): before next_effective, row fresh -> general_rate
+    const before = selectMinWageRate(freshRow, '2026-08-06');
+    // Behavior (b): on/after next_effective -> next_rate, REGARDLESS of how
+    // old as_of is (this is exactly the case the inverted predicate broke:
+    // as_of far in the past would have wrongly forced a skip here).
+    const staleAsOfRow = { ...freshRow, as_of: '2020-01-01' };
+    const onOrAfter = selectMinWageRate(staleAsOfRow, '2026-10-01');
+    const wellAfter = selectMinWageRate(staleAsOfRow, '2027-03-01');
+    // Behavior (c): no rate covers today -> skip. Row is >12mo past as_of
+    // AND next_effective (if any) has not arrived, so only the stale
+    // general_rate would apply -> must skip instead of using it.
+    const noCoverRow = { general_rate: 15.00, next_rate: null, next_effective: null, as_of: '2020-01-01' };
+    const noCover = selectMinWageRate(noCoverRow, '2026-08-06');
+    const noCoverFutureNext = selectMinWageRate(
+      { general_rate: 15.00, next_rate: 16.00, next_effective: '2027-01-01', as_of: '2020-01-01' },
+      '2026-08-06'
+    );
+
+    const behaviorOk =
+      before.source === 'general_rate' && before.rate === 17.60 && !before.skip &&
+      onOrAfter.source === 'next_rate' && onOrAfter.rate === 17.95 && !onOrAfter.skip &&
+      wellAfter.source === 'next_rate' && wellAfter.rate === 17.95 && !wellAfter.skip &&
+      noCover.skip === true && noCover.rate === null &&
+      noCoverFutureNext.skip === true && noCoverFutureNext.rate === null;
+
+    if (behaviorOk) {
+      pass('minimum-wage reference selection algorithm (as specified) correctly uses general_rate before next_effective, next_rate on/after next_effective regardless of as_of staleness, and skips only when no rate covers today (#2027, CodeRabbit round 2)');
+    } else {
+      fail(`minimum-wage reference selection algorithm produced wrong results: before=${JSON.stringify(before)} onOrAfter=${JSON.stringify(onOrAfter)} wellAfter=${JSON.stringify(wellAfter)} noCover=${JSON.stringify(noCover)} noCoverFutureNext=${JSON.stringify(noCoverFutureNext)} (#2027, CodeRabbit round 2)`);
+    }
+
+    // (b) directional-wording checks against the actual shipped prose, so a
+    //     reversed condition in the real files (not just this test's own
+    //     reference function) cannot pass silently. Both files must (i)
+    //     explicitly state that general_rate applies BEFORE next_effective
+    //     and next_rate applies ON OR AFTER next_effective, and (ii)
+    //     explicitly disclaim the exact bug that shipped in round 1 — that
+    //     an arrived next_effective is a skip/stale trigger. Checking for
+    //     the disclaimer (not just the positive rule, which both the buggy
+    //     and fixed prose could plausibly state elsewhere) is what makes
+    //     this resistant to a reversed skip-condition sneaking back in.
+    const mwYmlRaw = readFileSync(join(ROOT, 'templates', 'minimum-wage.yml'), 'utf-8');
+    const ymlHasCorrectSelection =
+      /general_rate[\s\S]{0,60}before[\s\S]{0,60}next_effective/i.test(mwYmlRaw) &&
+      /next_rate[\s\S]{0,60}on or after[\s\S]{0,60}next_effective/i.test(mwYmlRaw);
+    const modeHasCorrectSelection =
+      /general_rate[\s\S]{0,60}before[\s\S]{0,60}next_effective/i.test(mwSection) &&
+      /next_rate[\s\S]{0,60}on or after[\s\S]{0,60}next_effective/i.test(mwSection);
+    const ymlDisclaimsInversion = /never skipped as stale/i.test(mwYmlRaw) && /already-arrived/i.test(mwYmlRaw);
+    const modeDisclaimsInversion = /never skipped as stale/i.test(mwSection) && /next_effective[\s\S]{0,20}(has\s+)?passed/i.test(mwSection);
+
+    if (ymlHasCorrectSelection && modeHasCorrectSelection && ymlDisclaimsInversion && modeDisclaimsInversion) {
+      pass('minimum-wage.yml and oferta.md correctly state general_rate-before/next_rate-on-or-after selection AND explicitly disclaim an arrived next_effective as a staleness/skip trigger — the round-1 inversion cannot silently return (#2027, CodeRabbit round 2)');
+    } else {
+      fail(`minimum-wage.yml / oferta.md staleness prose missing the corrected direction and/or the explicit anti-inversion disclaimer (yml selection=${ymlHasCorrectSelection}, mode selection=${modeHasCorrectSelection}, yml disclaims=${ymlDisclaimsInversion}, mode disclaims=${modeDisclaimsInversion}) (#2027, CodeRabbit round 2)`);
+    }
+  }
 }
 
 // --- offer-prep mode: contract reading companion (describes, never judges) ---

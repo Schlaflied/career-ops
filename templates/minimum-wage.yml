@@ -36,13 +36,22 @@
 # ever pre-announced. A uniform 12-month freshness threshold applies to
 # EVERY row, including rows with no `next_effective`: if today's date is
 # more than 12 months past `as_of`, the row is review-due — the agent must
-# treat it as tentative reference data at best, and skip the comparison
-# entirely if the row carries no verified rate covering today (no
-# `next_rate`, or `next_rate`'s own `next_effective` window has also
-# passed) rather than presenting stale reference data as current. Within a
-# row that is still fresh under this 12-month gate, date-aware selection
-# applies as usual: use `general_rate` while today < `next_effective`; use
-# `next_rate` once today >= `next_effective`.
+# treat it as tentative reference data at best. Date-aware rate selection
+# ALWAYS runs first: use `general_rate` while today is before
+# `next_effective`; use `next_rate` once today is on or after
+# `next_effective` — an arrived `next_effective` date means `next_rate` is
+# now the officially confirmed, in-force rate, never a sign of staleness.
+# The 12-month review-due gate only matters when today is still before
+# `next_effective` (or there is no `next_effective` at all), because in
+# that case `general_rate` is the sole rate covering today and it is the
+# one that can have gone stale: skip the comparison entirely ONLY when no
+# rate actually covers today — i.e. the row is review-due under the
+# 12-month gate AND (there is no `next_rate` at all, OR `next_rate` exists
+# but its `next_effective` date has not arrived yet, leaving nothing but
+# the stale `general_rate` to compare against) — rather than presenting
+# stale reference data as current. A row with an already-arrived
+# `next_effective` is NEVER skipped as stale on that basis alone: `next_rate`
+# is by definition the rate covering today.
 #
 # NOT LEGAL ADVICE: these rows are non-authoritative reference figures so
 # the agent can state observable, caveated arithmetic about a posting's
