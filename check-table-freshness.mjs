@@ -111,9 +111,10 @@ export function addMonthsUTC(date, deltaMonths) {
 //      rows, e.g. `rows: [{ jurisdiction: "CA-ON", as_of: ... }, ...]`.
 //   2. Mappings under a top-level key whose VALUES are themselves object
 //      rows, e.g. `jurisdictions: { CA-ON: { as_of: ..., ... }, US-CO: {...} }`
-//      (templates/pay-transparency.yml's shape — the jurisdiction code is the
-//      map key rather than a `jurisdiction` field, so it is synthesized onto
-//      the row when the row doesn't already declare its own).
+//      (a mapping-shaped table keyed by jurisdiction code rather than an
+//      array of rows — the jurisdiction code is the map key rather than a
+//      `jurisdiction` field, so it is synthesized onto the row when the row
+//      doesn't already declare its own).
 // Once a row-set qualifies, EVERY row in it is returned — rows missing the
 // mandatory `as_of` are tagged `missingAsOf: true` so checkFreshness can warn
 // about them instead of letting them silently vanish from validation.
@@ -400,10 +401,12 @@ function runSelfTest() {
     'notes: "no as_of anywhere"',
   ].join('\n'));
 
-  // Mapping-shaped row-set (templates/pay-transparency.yml's shape): a
-  // top-level key whose value is an OBJECT keyed by jurisdiction code, not
-  // an array. The jurisdiction code is the map key, not a `jurisdiction`
-  // field on the row — extractRows must synthesize it.
+  // Mapping-shaped row-set: a top-level key whose value is an OBJECT keyed
+  // by jurisdiction code, not an array. The jurisdiction code is the map
+  // key, not a `jurisdiction` field on the row — extractRows must
+  // synthesize it. (This shape has no real-world table consumer at present
+  // — kept as generic, self-tested discovery support for any future
+  // mapping-keyed jurisdiction table.)
   const MAPPING_TABLE = yaml.load([
     'jurisdictions:',
     '  QQ-TEST:',
