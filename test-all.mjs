@@ -33,6 +33,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import yaml from 'js-yaml';
 import { pass, fail, warn, run, lastRunFailure, formatRunFailure, fileExists, finish, ROOT, QUICK, NODE, getBash, toBashPath } from './tests/helpers.mjs';
 import { flagValue, hasFlag } from './lib/cli-flags.mjs';
+import { addMonthsUTC as mwAddMonthsUTC } from './check-table-freshness.mjs';
 
 /**
  * Read a repo-relative text file as UTF-8.
@@ -2566,8 +2567,16 @@ if (
       // next_rate to fall back on being "the" covering rate (there isn't
       // one yet regardless — that's the branch we're in — so the 12-month
       // gate alone decides).
-      const monthsSinceAsOf = (today - new Date(row.as_of)) / (1000 * 60 * 60 * 24 * 30.44);
-      if (monthsSinceAsOf > 12) {
+      //
+      // UTC calendar-month comparison — mirrors check-table-freshness.mjs's
+      // own addMonthsUTC/reviewCutoff logic exactly (a naive
+      // days-elapsed/30.44 division misclassifies an EXACTLY-12-month span
+      // as stale whenever it crosses a leap day, e.g. 2023-03-01 ->
+      // 2024-03-01 spans 366 days / 30.44 ≈ 12.02 months, which would wrongly
+      // trip a `> 12` day-based gate even though it is exactly 12 calendar
+      // months and must NOT be treated as stale).
+      const reviewCutoff = mwAddMonthsUTC(today, -12);
+      if (new Date(row.as_of) < reviewCutoff) {
         return { source: null, rate: null, skip: true };
       }
       return { source: 'general_rate', rate: row.general_rate, skip: false };
@@ -2597,18 +2606,28 @@ if (
       { general_rate: 15.00, next_rate: 16.00, next_effective: '2027-01-01', as_of: '2020-01-01' },
       '2026-08-06'
     );
+    // Behavior (d): CodeRabbit leap-day regression — 2023-03-01 to 2024-03-01
+    // is EXACTLY 12 calendar months (the span crosses the 2024-02-29 leap
+    // day, so it is 366 days). A naive days/30.44 approximation computes
+    // ~12.02 months and would wrongly flag this as stale (> 12). The UTC
+    // calendar-month comparison must treat it as exactly at the boundary —
+    // NOT yet review-due — matching check-table-freshness.mjs's own
+    // addMonthsUTC/reviewCutoff semantics (asOf < reviewCutoff, strict).
+    const exactTwelveMonthsRow = { general_rate: 15.00, next_rate: null, next_effective: null, as_of: '2023-03-01' };
+    const exactTwelveMonths = selectMinWageRate(exactTwelveMonthsRow, '2024-03-01');
 
     const behaviorOk =
       before.source === 'general_rate' && before.rate === 17.60 && !before.skip &&
       onOrAfter.source === 'next_rate' && onOrAfter.rate === 17.95 && !onOrAfter.skip &&
       wellAfter.source === 'next_rate' && wellAfter.rate === 17.95 && !wellAfter.skip &&
       noCover.skip === true && noCover.rate === null &&
-      noCoverFutureNext.skip === true && noCoverFutureNext.rate === null;
+      noCoverFutureNext.skip === true && noCoverFutureNext.rate === null &&
+      exactTwelveMonths.skip === false && exactTwelveMonths.source === 'general_rate' && exactTwelveMonths.rate === 15.00;
 
     if (behaviorOk) {
-      pass('minimum-wage reference selection algorithm (as specified) correctly uses general_rate before next_effective, next_rate on/after next_effective regardless of as_of staleness, and skips only when no rate covers today (#2027, CodeRabbit round 2)');
+      pass('minimum-wage reference selection algorithm (as specified) correctly uses general_rate before next_effective, next_rate on/after next_effective regardless of as_of staleness, skips only when no rate covers today, and treats an exactly-12-calendar-month-old as_of (2023-03-01 -> 2024-03-01, leap-day span) as NOT yet stale via UTC calendar-month comparison matching check-table-freshness.mjs (#2027, CodeRabbit round 3)');
     } else {
-      fail(`minimum-wage reference selection algorithm produced wrong results: before=${JSON.stringify(before)} onOrAfter=${JSON.stringify(onOrAfter)} wellAfter=${JSON.stringify(wellAfter)} noCover=${JSON.stringify(noCover)} noCoverFutureNext=${JSON.stringify(noCoverFutureNext)} (#2027, CodeRabbit round 2)`);
+      fail(`minimum-wage reference selection algorithm produced wrong results: before=${JSON.stringify(before)} onOrAfter=${JSON.stringify(onOrAfter)} wellAfter=${JSON.stringify(wellAfter)} noCover=${JSON.stringify(noCover)} noCoverFutureNext=${JSON.stringify(noCoverFutureNext)} exactTwelveMonths=${JSON.stringify(exactTwelveMonths)} (#2027, CodeRabbit round 3)`);
     }
 
     // (b) directional-wording checks against the actual shipped prose, so a
@@ -2621,20 +2640,33 @@ if (
     //     the disclaimer (not just the positive rule, which both the buggy
     //     and fixed prose could plausibly state elsewhere) is what makes
     //     this resistant to a reversed skip-condition sneaking back in.
-    const mwYmlRaw = readFileSync(join(ROOT, 'templates', 'minimum-wage.yml'), 'utf-8');
-    const ymlHasCorrectSelection =
-      /general_rate[\s\S]{0,60}before[\s\S]{0,60}next_effective/i.test(mwYmlRaw) &&
-      /next_rate[\s\S]{0,60}on or after[\s\S]{0,60}next_effective/i.test(mwYmlRaw);
-    const modeHasCorrectSelection =
-      /general_rate[\s\S]{0,60}before[\s\S]{0,60}next_effective/i.test(mwSection) &&
-      /next_rate[\s\S]{0,60}on or after[\s\S]{0,60}next_effective/i.test(mwSection);
-    const ymlDisclaimsInversion = /never skipped as stale/i.test(mwYmlRaw) && /already-arrived/i.test(mwYmlRaw);
-    const modeDisclaimsInversion = /never skipped as stale/i.test(mwSection) && /next_effective[\s\S]{0,20}(has\s+)?passed/i.test(mwSection);
+    // Guard the read: an unreadable/missing templates/minimum-wage.yml must
+    // not throw and abort the rest of the test suite. Record exactly one
+    // fail(...) for this check and skip the dependent prose assertions below
+    // — everything after this block (and every other test group in the
+    // file) still runs (CodeRabbit round 3, #2027).
+    let mwYmlRaw = null;
+    try {
+      mwYmlRaw = readFileSync(join(ROOT, 'templates', 'minimum-wage.yml'), 'utf-8');
+    } catch (err) {
+      fail(`could not read templates/minimum-wage.yml to verify staleness-direction prose: ${err.message} (#2027, CodeRabbit round 3)`);
+    }
 
-    if (ymlHasCorrectSelection && modeHasCorrectSelection && ymlDisclaimsInversion && modeDisclaimsInversion) {
-      pass('minimum-wage.yml and oferta.md correctly state general_rate-before/next_rate-on-or-after selection AND explicitly disclaim an arrived next_effective as a staleness/skip trigger — the round-1 inversion cannot silently return (#2027, CodeRabbit round 2)');
-    } else {
-      fail(`minimum-wage.yml / oferta.md staleness prose missing the corrected direction and/or the explicit anti-inversion disclaimer (yml selection=${ymlHasCorrectSelection}, mode selection=${modeHasCorrectSelection}, yml disclaims=${ymlDisclaimsInversion}, mode disclaims=${modeDisclaimsInversion}) (#2027, CodeRabbit round 2)`);
+    if (mwYmlRaw !== null) {
+      const ymlHasCorrectSelection =
+        /general_rate[\s\S]{0,60}before[\s\S]{0,60}next_effective/i.test(mwYmlRaw) &&
+        /next_rate[\s\S]{0,60}on or after[\s\S]{0,60}next_effective/i.test(mwYmlRaw);
+      const modeHasCorrectSelection =
+        /general_rate[\s\S]{0,60}before[\s\S]{0,60}next_effective/i.test(mwSection) &&
+        /next_rate[\s\S]{0,60}on or after[\s\S]{0,60}next_effective/i.test(mwSection);
+      const ymlDisclaimsInversion = /never skipped as stale/i.test(mwYmlRaw) && /already-arrived/i.test(mwYmlRaw);
+      const modeDisclaimsInversion = /never skipped as stale/i.test(mwSection) && /next_effective[\s\S]{0,20}(has\s+)?passed/i.test(mwSection);
+
+      if (ymlHasCorrectSelection && modeHasCorrectSelection && ymlDisclaimsInversion && modeDisclaimsInversion) {
+        pass('minimum-wage.yml and oferta.md correctly state general_rate-before/next_rate-on-or-after selection AND explicitly disclaim an arrived next_effective as a staleness/skip trigger — the round-1 inversion cannot silently return (#2027, CodeRabbit round 2)');
+      } else {
+        fail(`minimum-wage.yml / oferta.md staleness prose missing the corrected direction and/or the explicit anti-inversion disclaimer (yml selection=${ymlHasCorrectSelection}, mode selection=${modeHasCorrectSelection}, yml disclaims=${ymlDisclaimsInversion}, mode disclaims=${modeDisclaimsInversion}) (#2027, CodeRabbit round 2)`);
+      }
     }
   }
 }
