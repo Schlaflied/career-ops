@@ -2634,26 +2634,46 @@ if (
       const { load } = await import('js-yaml');
       const semRaw = readFileSync(semPath, 'utf-8');
       const sem = load(semRaw);
+      // Validate EVERY jurisdiction row against the flag-only schema — not
+      // just CA-ON — so future rows can't sneak in floor values or doctrine
+      // narrative while the suite still passes (#2039, CodeRabbit).
       const rows = Array.isArray(sem?.minimums) ? sem.minimums : [];
+      const allowedCategories = ['vacation', 'notice', 'severance', 'probation_limits'];
+      const rowFailures = [];
+      for (const row of rows) {
+        const categories = Array.isArray(row?.floor_categories) ? row.floor_categories : [];
+        const rowText = row ? JSON.stringify(row) : '';
+        const ok = Boolean(
+          row &&
+          typeof row.jurisdiction === 'string' && row.jurisdiction.length > 0 &&
+          typeof row.jurisdiction_name === 'string' && row.jurisdiction_name.length > 0 &&
+          categories.every((c) => allowedCategories.includes(c)) &&
+          (row.void_doctrine === undefined || typeof row.void_doctrine === 'boolean') &&
+          typeof row.legal_basis === 'string' && row.legal_basis.length > 0 &&
+          Array.isArray(row.sources) && row.sources.length > 0 &&
+          typeof row.as_of === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.as_of) &&
+          // no floor VALUES or doctrine NARRATIVE anywhere in the row — a
+          // bare case-name/statute citation in `sources` is fine (that's
+          // the point of #2039's citable-source requirement); what's
+          // banned is stating the current figure or narrating a holding.
+          !row.floors &&
+          !/\d+\s*(weeks?|days?|months?)/i.test(rowText) &&
+          !/wilful.misconduct standard|void(s|ed)? the (entire|whole)|the current (statutory )?(floor|minimum) is/i.test(rowText)
+        );
+        if (!ok) rowFailures.push(row?.jurisdiction || '(row missing jurisdiction)');
+      }
       const caOn = rows.find((r) => r?.jurisdiction === 'CA-ON');
-      const categories = Array.isArray(caOn?.floor_categories) ? caOn.floor_categories : [];
-      const rowText = caOn ? JSON.stringify(caOn) : '';
+      const caOnCategories = Array.isArray(caOn?.floor_categories) ? caOn.floor_categories : [];
       if (
+        rows.length > 0 &&
+        rowFailures.length === 0 &&
         caOn &&
-        typeof caOn.jurisdiction_name === 'string' &&
-        ['vacation', 'notice', 'severance', 'probation_limits'].every((k) => categories.includes(k)) &&
-        caOn.void_doctrine === true &&
-        typeof caOn.legal_basis === 'string' && caOn.legal_basis.length > 0 &&
-        Array.isArray(caOn.sources) && caOn.sources.length > 0 &&
-        typeof caOn.as_of === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(caOn.as_of) &&
-        // no floor VALUES or doctrine NARRATIVE anywhere in the row
-        !caOn.floors &&
-        !/\d+\s*(weeks?|days?|months?)/i.test(rowText) &&
-        !/Waksdale|ONCA|wilful.misconduct|Dufault/i.test(rowText)
+        allowedCategories.every((k) => caOnCategories.includes(k)) &&
+        caOn.void_doctrine === true
       ) {
-        pass('statutory-employment-minimums.yml parses; CA-ON seed is flag-only — floor_categories (vacation/notice/severance/probation_limits), void_doctrine: true, statute-name legal_basis, sources, quoted-string as_of, and NO floor values or doctrine narrative (#2039, CodeRabbit)');
+        pass('statutory-employment-minimums.yml parses; every jurisdiction row (incl. CA-ON: floor_categories vacation/notice/severance/probation_limits, void_doctrine: true) matches the flag-only schema — statute-name legal_basis, sources, quoted-string as_of, and NO floor values or doctrine narrative anywhere (#2039, CodeRabbit)');
       } else {
-        fail('statutory-employment-minimums.yml CA-ON seed does not match the flag-only shape — needs floor_categories covering all four families, void_doctrine: true, a statute-name legal_basis, sources, quoted-string as_of, and must NOT carry floor values or doctrine narrative (case names/holdings) (#2039, CodeRabbit)');
+        fail(`statutory-employment-minimums.yml row(s) do not match the flag-only schema (offending: ${rowFailures.join(', ') || 'CA-ON seed shape'}) — every row needs an allowlisted floor_categories, boolean void_doctrine, a statute-name legal_basis, sources, quoted-string as_of, and must NOT carry floor values or doctrine narrative (case holdings) (#2039, CodeRabbit)`);
       }
       if (
         semRaw.includes('CONTRIBUTION RULE') &&
@@ -2692,12 +2712,15 @@ if (
     semSection.includes('floor_categories') &&
     semSection.includes('void_doctrine') &&
     /no severance-amount calculations,\s+no floor-figure statements/.test(semSection) &&
-    semSection.includes('Bardal') &&
-    // must NOT reintroduce the removed floor value / doctrine narrative
+    /never computes, estimates, or\s+ranges a notice or severance amount/.test(semSection) &&
+    // must NOT reintroduce the removed floor value / doctrine narrative, and
+    // must NOT reintroduce a named case/doctrine (e.g. Bardal) as a factor
+    // list or asserted holding — a bare case citation belongs only in the
+    // YAML `sources` field, never narrated in the mode's own prose
     !/2 weeks|3 weeks|8 weeks|26 weeks/.test(semSection) &&
-    !/Waksdale|ONCA 391|wilful.misconduct standard/i.test(semSection)
+    !/Waksdale|ONCA 391|wilful.misconduct standard|Bardal/i.test(semSection)
   ) {
-    pass('offer-prep sub-statutory-terms subsection pins flag-only table lookup, tag-note + lawyer-question routing (no asserted floor value/doctrine holding), floors-absent silence, never-assert hard rule, no-research reaffirmation, i18n rendering, Bardal no-calculations non-goal — and carries no reintroduced statutory figures or doctrine narrative (#2039, CodeRabbit)');
+    pass('offer-prep sub-statutory-terms subsection pins flag-only table lookup, tag-note + lawyer-question routing (no asserted floor value/doctrine holding), floors-absent silence, never-assert hard rule, no-research reaffirmation, i18n rendering, no-calculations non-goal without a named-case factor list — and carries no reintroduced statutory figures or doctrine narrative (#2039, CodeRabbit)');
   } else {
     fail('offer-prep sub-statutory-terms subsection missing/incomplete, or still asserts a specific floor value / doctrine holding — needs flag-only table reference, statutory-context note + lawyer-question routing, floors-absent silence rule, the floor-value/doctrine never-assert hard rule, local-lookup-is-not-research clarification, {language.output} rendering, no-severance-calculations non-goal, and must not restate the removed ESA figures or Waksdale narrative (#2039, CodeRabbit)');
   }

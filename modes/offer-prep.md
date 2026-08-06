@@ -30,11 +30,17 @@ It is NOT:
   figures must never appear in an outbound query of any kind.
 - **Never state law from memory.** Jurisdiction-dependent legal questions
   become entries in the Questions-for-your-lawyer list — never answered
-  inline, never guessed. The single sanctioned source of statutory facts is
+  inline, never guessed. The sanctioned sources of statutory facts are
   `templates/restrictive-covenants.yml` (a verified, cited, local data
-  table — see the statutory-context subsection in Step 2); reading it is a
-  local file lookup, not online research and not memory. Anything not in
-  the table stays a lawyer question.
+  table — see the statutory-context subsection in Step 2) and, narrowly,
+  `templates/statutory-employment-minimums.yml` — but only for its two
+  structural flags (`floor_categories`, `void_doctrine` booleans) and the
+  statute-name `legal_basis` pointer. Current statutory floor VALUES,
+  doctrine HOLDINGS, and any clause-specific legal conclusion are never
+  sanctioned, from either table or from memory, and stay lawyer questions
+  even when a table's flags are consulted. Reading either table is a local
+  file lookup, not online research and not memory. Anything not covered by
+  these narrow carve-outs stays a lawyer question.
 - **Never headless.** This mode must not run in batch/headless mode
   (`claude -p`, batch workers, subagents). It requires an attending human.
   The repo's batch conventions explicitly do not apply here.
@@ -113,11 +119,13 @@ jurisdiction and route it to the lawyer list as a question; it may never
 assert what any law requires, permits, or prohibits. Content-level
 statements ("{state} requires X", "this is unenforceable") are banned. The
 `[commonly negotiated]` tag is a negotiation-norms meta-statement and is
-fine. One narrow, table-backed carve-out exists: statutory facts drawn
-verbatim-close from `templates/restrictive-covenants.yml` may be relayed
-with their citation as statutory-context notes (rules in Step 2) — but
-statements about what the law means for **this** clause remain banned
-everywhere.
+fine. Two narrow, table-backed carve-outs exist: statutory facts drawn
+verbatim-close from `templates/restrictive-covenants.yml`, and the
+structural flags (`floor_categories`, `void_doctrine`, statute-name
+`legal_basis`) from `templates/statutory-employment-minimums.yml`, may be
+relayed with their citation as statutory-context notes (rules in Step 2)
+— but statements about what the law means for **this** clause, and any
+current floor value or doctrine holding, remain banned everywhere.
 
 ## Step 2 — Clause walk (describe, don't judge)
 
@@ -280,13 +288,14 @@ case line): those change on a timeline no static table can track, and
 storing them would hand this mode apparent authority over what the law
 currently says. Reading the table is a local file lookup — it is **not**
 online research, and the no-online-research hard guard is unchanged: no
-WebSearch, no WebFetch, no URL visits, ever. Because the table carries no
-floor values or doctrine narrative, there is no carve-out of the "Never
-state law from memory" hard guard here — the mode never states what a
-statute currently requires or what a doctrine currently holds; it only
-states its own arithmetic on the clause's stated terms, plus the flag that
-the topic is regulated in this jurisdiction, and then routes the
-substantive legal question to the lawyer list.
+WebSearch, no WebFetch, no URL visits, ever. This table's flags are the
+narrow, sanctioned carve-out of the "Never state law from memory" hard
+guard described above — and the carve-out stops at the flags: the mode
+never states what a statute currently requires or what a doctrine
+currently holds. It only states its own arithmetic on the clause's stated
+terms, plus the flag that the topic is regulated in this jurisdiction, and
+then routes the substantive legal question (the current floor figure,
+whether a doctrine applies to this contract) to the lawyer list.
 
 **Floors-absent silence (mandatory):** a category is flagged only where the
 jurisdiction is actually known to regulate it. If the table has no row for
@@ -340,14 +349,15 @@ output shapes:**
      could void the whole clause? If so, does anything here trigger it, and
      what would that mean for my notice or severance?"]
 
-**The candidate-empowering angle (state it, neutrally, without naming a
-specific doctrine or case):** in jurisdictions with a whole-provision-voiding
-doctrine flagged, a defectively drafted termination clause can sometimes be
-**better** for the candidate than a validly drafted one — voiding the
-clause can fall back to more generous protection than the clause itself
-offered. That is exactly why it is worth asking a lawyer whether the flag
-applies here — not a reason to reject the offer, and never a verdict this
-mode renders or a doctrine this mode names as controlling.
+**The candidate-empowering angle (a question, not an asserted effect):** in
+jurisdictions with a whole-provision-voiding doctrine flagged, ask the
+lawyer directly whether that doctrine could work in the candidate's favor
+here — [Render in {language.output}: "If this termination provision has a
+defect that voids it, could that end up better for me than what the
+clause says — for example by falling back to broader protection? Is that
+worth exploring, or does it cut the other way in my situation?"] — never a
+reason on its own to reject the offer, and never an effect, holding, or
+doctrine name this mode states or resolves itself.
 
 **Never assert a floor value, doctrine holding, voidness, or violation
 (HARD RULE):** this mode never states what a jurisdiction's current
@@ -361,15 +371,14 @@ including the current legal figure itself, is always a lawyer question.
 Statutory-context notes are a flag to ask about, not legal advice.
 
 **Non-goal — no severance-amount calculations, no floor-figure statements:**
-common-law reasonable notice depends on Bardal-style factors (age, length
-of service, character of employment, availability of similar employment)
-that no table can hold, and current statutory floor figures depend on
-amendments and indexation that no static table can hold either. This mode
-never computes, estimates, or ranges a notice or severance amount, and
-never states what a jurisdiction's floor number currently is — "what is the
-current statutory minimum, and does this clause meet it?" is written into
-the lawyer question precisely because only a lawyer (or the current
-government source) can answer it.
+common-law reasonable notice depends on factors no table can hold, and
+current statutory floor figures depend on amendments and indexation that
+no static table can hold either. This mode never computes, estimates, or
+ranges a notice or severance amount, and never states what a
+jurisdiction's floor number currently is — "what is the current statutory
+minimum, and does this clause meet it?" is written into the lawyer
+question precisely because only a lawyer (or the current government
+source) can answer it.
 
 ## Step 3 — Consistency check
 
