@@ -2639,24 +2639,52 @@ if (
       // narrative while the suite still passes (#2039, CodeRabbit).
       const rows = Array.isArray(sem?.minimums) ? sem.minimums : [];
       const allowedCategories = ['vacation', 'notice', 'severance', 'probation_limits'];
+      // Documented schema (see the file's header comment) — any key outside
+      // this set is undocumented and rejected, not silently ignored.
+      const allowedKeys = new Set([
+        'jurisdiction', 'jurisdiction_name', 'floor_categories', 'void_doctrine',
+        'legal_basis', 'sources', 'as_of',
+      ]);
+      // Explicit, semantic denylist of quantified-value / doctrine-narrative
+      // fields a row must never carry — the PRIMARY control (#2039,
+      // CodeRabbit). A `JSON.stringify(row)` regex scan is easily fooled by
+      // reworded prose or an unlisted field name; asserting the field is
+      // simply absent is not.
+      const bannedFields = [
+        'floors', 'floor', 'minimum_vacation_days', 'vacation_days',
+        'notice_weeks', 'notice_days', 'notice_months', 'severance_weeks',
+        'severance_days', 'severance_formula', 'probation_days',
+        'probation_months', 'doctrine_holding', 'doctrine_name', 'holding',
+        'case_name', 'doctrine_narrative',
+      ];
       const rowFailures = [];
       for (const row of rows) {
-        const categories = Array.isArray(row?.floor_categories) ? row.floor_categories : [];
+        const rowKeys = row ? Object.keys(row) : [];
+        const unknownKeys = rowKeys.filter((k) => !allowedKeys.has(k));
+        const bannedPresent = bannedFields.filter((k) => row && Object.prototype.hasOwnProperty.call(row, k));
+        const sources = row?.sources;
+        // Secondary belt-and-suspenders sweep for doctrine narrative prose
+        // that wouldn't be caught by a field-name check (e.g. holding text
+        // pasted into `legal_basis` instead of a proper field) — supplements,
+        // never substitutes for, the semantic field checks above.
         const rowText = row ? JSON.stringify(row) : '';
         const ok = Boolean(
           row &&
           typeof row.jurisdiction === 'string' && row.jurisdiction.length > 0 &&
           typeof row.jurisdiction_name === 'string' && row.jurisdiction_name.length > 0 &&
-          categories.every((c) => allowedCategories.includes(c)) &&
+          Array.isArray(row.floor_categories) &&
+          row.floor_categories.every((c) => allowedCategories.includes(c)) &&
           (row.void_doctrine === undefined || typeof row.void_doctrine === 'boolean') &&
           typeof row.legal_basis === 'string' && row.legal_basis.length > 0 &&
-          Array.isArray(row.sources) && row.sources.length > 0 &&
+          Array.isArray(sources) && sources.length > 0 &&
+          sources.every((s) => typeof s === 'string' && s.trim().length > 0) &&
           typeof row.as_of === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.as_of) &&
+          unknownKeys.length === 0 &&
+          bannedPresent.length === 0 &&
           // no floor VALUES or doctrine NARRATIVE anywhere in the row — a
           // bare case-name/statute citation in `sources` is fine (that's
           // the point of #2039's citable-source requirement); what's
           // banned is stating the current figure or narrating a holding.
-          !row.floors &&
           !/\d+\s*(weeks?|days?|months?)/i.test(rowText) &&
           !/wilful.misconduct standard|void(s|ed)? the (entire|whole)|the current (statutory )?(floor|minimum) is/i.test(rowText)
         );

@@ -306,10 +306,23 @@ absent flag means silence, never a warning — and the standard Step 1
 meta-statement boundary applies unchanged (topic → lawyer list, no law
 stated).
 
-**On a match — a walked clause states a quantified term in a flagged
-category, or a termination provision is walked in a jurisdiction whose row
-carries `void_doctrine: true` — two things happen, both inside existing
-output shapes:**
+**Two distinct match conditions (never merged into one):**
+
+- **`floorMatch`** — the walked clause states a quantified term in a
+  category that is present in the jurisdiction row's `floor_categories`.
+- **`voidDoctrineMatch`** — the walked clause is a termination provision
+  AND the jurisdiction row carries `void_doctrine: true` — regardless of
+  whether that termination clause states a quantified term.
+
+These are evaluated independently. A termination clause with no quantified
+notice or severance term, walked in a `void_doctrine: true` jurisdiction,
+is a `voidDoctrineMatch` **only** — it is not a `floorMatch`, because there
+is no quantified term to compute clause arithmetic on. Floors-absent
+silence (above) still governs `floorMatch`: if `floor_categories` doesn't
+cover the clause's category, `floorMatch` is false no matter what
+`voidDoctrineMatch` evaluates to.
+
+**On `floorMatch` — inside existing output shapes:**
 
 1. The clause's neutral tags (which always include `[ask your lawyer]` in
    this situation) gain a **statutory-context note** — an arithmetic fact
@@ -330,24 +343,40 @@ output shapes:**
    > reaches this specific clause, are questions for the lawyer list below.
    > This is a statutory-context flag, not legal advice.]
 
-2. The **Questions for your lawyer** list gains targeted, clause-anchored
-   entries, each rendered in `{language.output}` — the English wordings
-   below are semantic templates for the question's content, never text to
-   copy verbatim (the clause's own stated term stays as-is; nothing else in
-   the template is a fact to preserve verbatim, since no floor value or
-   doctrine narrative is stored to begin with):
-   - the generic floor question — e.g. for the fictional Acme Corp offer
-     above: [Render in {language.output}: "This clause states 10 vacation
-     days. What is the current statutory minimum for vacation in Ontario,
-     and does this clause meet it — or does the floor apply regardless of
-     what the clause says?"]
-   - when the row carries `void_doctrine: true` and the walked clause is a
-     termination provision, the doctrine-directed question — generic to
-     any jurisdiction with the flag set: [Render in {language.output}:
-     "Does this jurisdiction have a doctrine under which a defect elsewhere
-     in this termination provision — even in a part that's never invoked —
-     could void the whole clause? If so, does anything here trigger it, and
-     what would that mean for my notice or severance?"]
+2. The **Questions for your lawyer** list gains the generic floor
+   question, rendered in `{language.output}` — the English wording below
+   is a semantic template for the question's content, never text to copy
+   verbatim (the clause's own stated term stays as-is; nothing else in the
+   template is a fact to preserve verbatim, since no floor value is stored
+   to begin with):
+   - e.g. for the fictional Acme Corp offer above: [Render in {language.output}: "This clause states 10 vacation days. What is the current statutory minimum for vacation in Ontario, and does this clause meet it — or does the floor apply regardless of what the
+     clause says?"]
+
+**On `voidDoctrineMatch` — inside existing output shapes:**
+
+When the row carries `void_doctrine: true` and the walked clause is a
+termination provision, the **Questions for your lawyer** list gains the
+doctrine-directed question, rendered in `{language.output}` — generic to
+any jurisdiction with the flag set, never naming a case or asserting an
+effect: [Render in {language.output}: "Does this jurisdiction have a
+doctrine under which a defect elsewhere in this termination provision —
+even in a part that's never invoked — could void the whole clause? If so,
+does anything here trigger it, and what would that mean for my notice or
+severance?"]
+
+No statutory-context note and no generic floor question are produced for a
+`voidDoctrineMatch` that is not also a `floorMatch` — there is no quantified
+term to state clause arithmetic about, and producing either would be
+exactly the unsupported-arithmetic / unrelated-floor-question failure mode
+this split exists to prevent.
+
+**When a clause is both a `floorMatch` and a `voidDoctrineMatch`** (e.g. a
+termination clause that states a quantified notice term, walked in a
+jurisdiction whose row carries `void_doctrine: true`): both blocks above
+fire — the statutory-context note, the generic floor question, **and** the
+doctrine-directed question all appear for that one clause. The two match
+conditions are independent triggers, not alternatives; nothing about
+satisfying one suppresses the other.
 
 **The candidate-empowering angle (a question, not an asserted effect):** in
 jurisdictions with a whole-provision-voiding doctrine flagged, ask the
