@@ -33,7 +33,6 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import yaml from 'js-yaml';
 import { pass, fail, warn, run, lastRunFailure, formatRunFailure, fileExists, finish, ROOT, QUICK, NODE, getBash, toBashPath } from './tests/helpers.mjs';
 import { flagValue, hasFlag } from './lib/cli-flags.mjs';
-import { addMonthsUTC as mwAddMonthsUTC } from './check-table-freshness.mjs';
 
 /**
  * Read a repo-relative text file as UTF-8.
@@ -2430,63 +2429,33 @@ if (
   }
 }
 
-// --- Block G minimum-wage floor check (#2025) ---
+// --- Block G minimum-wage lawyer question (#2025, reshaped #2280) ---
+// Per maintainer direction on #2027: no jurisdiction wage table, no
+// comparison/assertion against any statutory rate. This signal only does
+// the arithmetic that needs no legal table (offer -> comparable hourly
+// figure) and routes the actual compliance question to a lawyer.
 {
-  // 1. Jurisdiction table exists, parses as YAML, and the CA-ON seed is complete
+  // 1. templates/minimum-wage.yml must be GONE — the reshape's whole point
+  //    is that no rate table should exist to go stale.
   const mwPath = join(ROOT, 'templates', 'minimum-wage.yml');
   if (!existsSync(mwPath)) {
-    fail('templates/minimum-wage.yml missing (#2025)');
+    pass('templates/minimum-wage.yml removed — no jurisdiction wage table ships (#2280)');
   } else {
-    try {
-      const { load } = await import('js-yaml');
-      const mwRaw = readFileSync(mwPath, 'utf-8');
-      const mw = load(mwRaw);
-      const on = mw?.jurisdictions?.['CA-ON'];
-      if (
-        on &&
-        on.general_rate === 17.60 &&
-        on.currency === 'CAD' &&
-        String(on.effective).startsWith('2025-10-01') &&
-        on.next_rate === 17.95 &&
-        String(on.next_effective).startsWith('2026-10-01') &&
-        Array.isArray(on.special_rates) && on.special_rates.length > 0 &&
-        typeof on.legal_basis === 'string' && on.legal_basis.includes('Employment Standards Act') &&
-        Array.isArray(on.sources) && on.sources.length > 0 &&
-        Boolean(on.as_of)
-      ) {
-        pass('minimum-wage.yml parses and CA-ON seed carries 17.60→17.95 rates, both effective dates, special_rates, legal_basis, sources, as_of (#2025)');
-      } else {
-        fail('minimum-wage.yml CA-ON seed incomplete — needs general_rate 17.60 CAD (2025-10-01), next_rate 17.95 (2026-10-01), special_rates, legal_basis (ESA 2000), sources, as_of (#2025)');
-      }
-      if (
-        mwRaw.includes('CONTRIBUTION RULE') &&
-        mwRaw.includes('STALENESS RULE') &&
-        mwRaw.includes('review-due') &&
-        mwRaw.includes('12 months') &&
-        mwRaw.includes('NON-AUTHORITATIVE') &&
-        mwRaw.includes('No PRODUCTION script reads it') &&
-        mwRaw.includes('DOES validate its structure')
-      ) {
-        pass('minimum-wage.yml header documents the contribution rule, the 12-month uniform staleness rule, the non-authoritative framing, and the accurate no-production-script/test-validated consumer boundary (#2025, CodeRabbit)');
-      } else {
-        fail('minimum-wage.yml header missing the contribution rule, 12-month staleness rule, non-authoritative framing, and/or accurate consumer-boundary wording (#2025, CodeRabbit)');
-      }
-    } catch (e) {
-      fail(`templates/minimum-wage.yml does not parse as YAML: ${e.message} (#2025)`);
-    }
+    fail('templates/minimum-wage.yml still exists — maintainer direction on #2027/#2280 was to drop the rate table entirely');
   }
 
-  // 2. oferta.md carries the wage-floor section with jurisdiction-strict
-  //    resolution, a fixed-cash comparable-amount gate, JD-hours-first
-  //    normalization, a uniform 12-month staleness gate, carve-out honesty
-  //    requiring every eligibility condition, non-authoritative framing with
-  //    a lawyer-directed question, and the corroborator-not-tier-changer
-  //    constraint (CodeRabbit round on #2027)
-  const mwStart = ofertaMode.indexOf('Minimum-Wage Floor Check');
+  // 2. oferta.md carries the reshaped section: no reference to the deleted
+  //    table, jurisdiction still resolved strictly from the JD (no
+  //    config/profile.yml fallback), the fixed-cash comparable-amount gate
+  //    and JD-hours-first normalization are preserved, and no staleness/
+  //    carve-out-eligibility machinery (which existed only to support the
+  //    now-deleted table comparison) remains.
+  const mwStart = ofertaMode.indexOf('**13. Minimum-Wage Lawyer Question**');
   const mwEnd = ofertaMode.indexOf('### Output format:', Math.max(mwStart, 0));
   const mwSection = mwStart >= 0 && mwEnd > mwStart ? ofertaMode.slice(mwStart, mwEnd) : '';
   if (
-    mwSection.includes('templates/minimum-wage.yml') &&
+    mwSection &&
+    !mwSection.includes('templates/minimum-wage.yml') &&
     mwSection.includes('NEVER from `config/profile.yml`') &&
     mwSection.includes('Comparable-amount gate (mandatory)') &&
     mwSection.includes('guaranteed, fixed cash amount') &&
@@ -2494,180 +2463,108 @@ if (
     mwSection.includes("JD's own stated working hours") &&
     mwSection.includes('2080 hours/year') &&
     mwSection.includes('always disclose in the output which hours figure was used') &&
-    mwSection.includes('12-month staleness gate (mandatory') &&
-    mwSection.includes('review-due') &&
-    mwSection.includes('Carve-out honesty:') &&
-    mwSection.includes('**every** eligibility condition') &&
-    mwSection.includes('carve-out is unverified') &&
-    mwSection.includes('non-authoritative') &&
+    mwSection.includes('Jurisdiction resolution (mandatory)') &&
     mwSection.includes('[ask your lawyer]') &&
-    mwSection.includes('never by itself changes') &&
-    mwSection.includes('not legal advice')
+    mwSection.includes('never conditioned on whether') &&
+    !mwSection.includes('staleness gate') &&
+    !mwSection.includes('Carve-out honesty') &&
+    !mwSection.includes('as_of') &&
+    !mwSection.includes('reference rate')
   ) {
-    pass('oferta Block G wage-floor signal pins jurisdiction-strict resolution (no profile fallback), fixed-cash-only comparable-amount gate, JD-hours-first normalization, uniform 12-month staleness gate, full-eligibility carve-out honesty, non-authoritative reference framing with lawyer-directed question, corroborator-only tier impact (#2025, CodeRabbit)');
+    pass('oferta Block G signal 13 dropped the wage-table reference and staleness/carve-out-eligibility machinery while keeping jurisdiction-strict resolution (no profile fallback), the fixed-cash comparable-amount gate, and JD-hours-first normalization (#2280)');
   } else {
-    fail('oferta Block G missing/incomplete minimum-wage floor section per CodeRabbit round — needs jurisdiction-strict resolution (no config/profile.yml fallback), fixed-cash comparable-amount gate excluding ranges/variable comp, JD-hours-first normalization with 2080 fallback disclosure, uniform 12-month staleness gate, full-eligibility carve-out honesty, non-authoritative framing with [ask your lawyer] routing, corroborator-not-tier-changer constraint, not-legal-advice note (#2025, CodeRabbit)');
+    fail('oferta Block G signal 13 missing/incomplete post-#2280 reshape — needs: no templates/minimum-wage.yml reference, jurisdiction still resolved strictly from the JD only, fixed-cash comparable-amount gate excluding ranges/variable comp, JD-hours-first normalization with 2080 fallback disclosure, [ask your lawyer] routing, unconditional firing rule, AND removal of the old staleness gate / carve-out-honesty / as_of / reference-rate language that only made sense with a table (#2280)');
   }
 
-  // 3. Phrasing discipline holds in the report-facing text: the blockquote
-  //    templates the agent renders must state facts, never legal accusations,
-  //    and must never assert the CURRENT legal minimum as verified fact.
-  //    (The rule text itself may quote the banned phrases to forbid them,
-  //    so only '>' lines — the rendered output templates — are scanned.)
+  // 3. Phrasing discipline: the rendered blockquote must never assert or
+  //    imply a current statutory minimum wage, never claim compliance either
+  //    way, and must route to [ask your lawyer]. (The rule text itself may
+  //    quote banned phrases to forbid them, so only '>' lines — the
+  //    rendered output template — are scanned.)
   const mwQuoteLines = mwSection.split('\n').filter((l) => l.trimStart().startsWith('>'));
   const mwAccusatory = mwQuoteLines.filter((l) => /illegal|violation|breaking the law/i.test(l));
   const mwHasLawyerRouting = mwQuoteLines.some((l) => l.includes('[ask your lawyer]'));
   if (mwSection && mwQuoteLines.length >= 1 && mwAccusatory.length === 0 && mwHasLawyerRouting) {
-    pass('minimum-wage report template states facts only, routes to [ask your lawyer] — no "illegal"/"violation"/"breaking the law" assertions (#2025, CodeRabbit)');
+    pass('minimum-wage report template routes to [ask your lawyer] with no "illegal"/"violation"/"breaking the law" assertions (#2280)');
   } else {
-    fail(`minimum-wage phrasing discipline broken: ${mwAccusatory.length ? `accusatory blockquote line(s): ${mwAccusatory[0].trim().slice(0, 80)}` : (!mwHasLawyerRouting ? 'missing [ask your lawyer] routing in rendered blockquote' : 'expected a blockquote output template in the section')} (#2025, CodeRabbit)`);
+    fail(`minimum-wage phrasing discipline broken: ${mwAccusatory.length ? `accusatory blockquote line(s): ${mwAccusatory[0].trim().slice(0, 80)}` : (!mwHasLawyerRouting ? 'missing [ask your lawyer] routing in rendered blockquote' : 'expected a blockquote output template in the section')} (#2280)`);
   }
 
-  // 4. Dual lawyer question (CodeRabbit round 2 on #2027): the rendered
-  //    hand-off must ask BOTH the statutory-compliance question AND, when a
-  //    special rate is present with unresolved eligibility, the carve-out-
-  //    applicability question — not just the first one.
+  // 4. The rendered lawyer question must follow santifer's exact shape from
+  //    his #2027 comment: computed hourly figure, hours basis disclosed,
+  //    jurisdiction name, statutory-minimum question, AND a mention of
+  //    special rates (student/homeworker) as a prompt — never an assertion
+  //    of eligibility, since there is no table to judge that from anymore.
   const mwHandoffQuote = mwQuoteLines.find((l) => l.includes('[ask your lawyer]')) || '';
   if (
-    /current statutory minimum wage/i.test(mwHandoffQuote) &&
-    /special.?rate carve-?out/i.test(mwHandoffQuote) &&
-    /appl(y|ies)/i.test(mwHandoffQuote)
+    /\/hour/i.test(mwHandoffQuote) &&
+    /statutory minimum/i.test(mwHandoffQuote) &&
+    /jurisdiction_name|\{jurisdiction/i.test(mwHandoffQuote) &&
+    /student/i.test(mwHandoffQuote) &&
+    /homeworker/i.test(mwHandoffQuote)
   ) {
-    pass('minimum-wage lawyer hand-off asks BOTH the statutory-compliance question and the special-rate-carve-out-applicability question (#2027, CodeRabbit round 2)');
+    pass('minimum-wage lawyer question follows the maintainer-specified shape: computed hourly figure, jurisdiction placeholder, statutory-minimum question, special-rates (student/homeworker) prompt (#2280)');
   } else {
-    fail('minimum-wage lawyer hand-off missing the dual question — must ask both whether the advertised amount complies with the statutory minimum AND, when eligibility for a listed special rate is unresolved, whether the carve-out applies to this role (#2027, CodeRabbit round 2)');
+    fail('minimum-wage lawyer question does not match the maintainer-specified shape — must include the hourly figure, the jurisdiction placeholder, the statutory-minimum question, and a student/homeworker special-rates prompt (#2280)');
   }
 
-  // 5. Real behavioral test for the staleness/rate-selection predicate
-  //    (CodeRabbit round 2 on #2027): a prior fix commit (64fd876) shipped
-  //    an INVERTED predicate — it treated an already-arrived `next_effective`
-  //    date as evidence the row was "uncovered"/stale, when an arrived
-  //    `next_effective` is exactly when `next_rate` becomes the confirmed,
-  //    in-force rate. Marker-phrase checks (mwSection.includes(...)) cannot
-  //    catch a reversed comparison direction because both directions use the
-  //    same vocabulary ("before"/"on or after"/"next_effective"). This test
-  //    instead (a) implements the CORRECT selection algorithm as specified
-  //    by CodeRabbit and exercises it against concrete date fixtures, and
-  //    (b) extracts the actual directional wording from the shipped prose in
-  //    both templates/minimum-wage.yml and modes/oferta.md and asserts it
-  //    matches the correct direction — so a reversed condition (e.g. "skip
-  //    when next_effective has passed") cannot silently pass again.
+  // 5. Behavioral test for the hourly-conversion arithmetic itself (the part
+  //    of the old algorithm that survives the reshape unchanged): fixed
+  //    cash amount -> comparable hourly figure, JD-stated hours preferred,
+  //    2080-hour fallback only when the JD is silent, ranges/variable comp
+  //    excluded by the comparable-amount gate.
   {
-    // (a) reference implementation of the specified-correct algorithm
-    function selectMinWageRate(row, todayISO) {
-      const today = new Date(todayISO);
-      const hasFutureConfirmedNext = row.next_rate != null && row.next_effective != null;
-      if (hasFutureConfirmedNext && today >= new Date(row.next_effective)) {
-        // next_effective has arrived: next_rate is the confirmed rate in
-        // force today — this is NEVER a staleness/skip condition.
-        return { source: 'next_rate', rate: row.next_rate, skip: false };
+    function computeHourlyFigure({ advertisedComp, isRange, isVariable, period, jdStatedHoursPerYear }) {
+      if (advertisedComp == null || isRange || isVariable) return { skip: true };
+      if (period === 'hourly') {
+        return { skip: false, hourly: advertisedComp, hoursBasis: 'n/a (already hourly)' };
       }
-      // Only general_rate is a candidate today. It is stale iff the row is
-      // more than 12 months past as_of AND there is no future-confirmed
-      // next_rate to fall back on being "the" covering rate (there isn't
-      // one yet regardless — that's the branch we're in — so the 12-month
-      // gate alone decides).
-      //
-      // UTC calendar-month comparison — mirrors check-table-freshness.mjs's
-      // own addMonthsUTC/reviewCutoff logic exactly (a naive
-      // days-elapsed/30.44 division misclassifies an EXACTLY-12-month span
-      // as stale whenever it crosses a leap day, e.g. 2023-03-01 ->
-      // 2024-03-01 spans 366 days / 30.44 ≈ 12.02 months, which would wrongly
-      // trip a `> 12` day-based gate even though it is exactly 12 calendar
-      // months and must NOT be treated as stale).
-      const reviewCutoff = mwAddMonthsUTC(today, -12);
-      if (new Date(row.as_of) < reviewCutoff) {
-        return { source: null, rate: null, skip: true };
-      }
-      return { source: 'general_rate', rate: row.general_rate, skip: false };
+      let annual = period === 'monthly' ? advertisedComp * 12 : advertisedComp;
+      const hoursPerYear = jdStatedHoursPerYear ?? 2080;
+      const hoursBasis = jdStatedHoursPerYear ? 'JD-stated' : '2080-hour fallback';
+      if (!hoursPerYear) return { skip: true };
+      return { skip: false, hourly: annual / hoursPerYear, hoursBasis };
     }
 
-    const freshRow = {
-      general_rate: 17.60,
-      next_rate: 17.95,
-      next_effective: '2026-10-01',
-      as_of: '2026-07-18',
-    };
+    // (a) already hourly -> passthrough
+    const hourly = computeHourlyFigure({ advertisedComp: 22.50, isRange: false, isVariable: false, period: 'hourly' });
+    // (b) annual, JD states 37.5 hrs/week * 52 = 1950 hrs/year -> preferred over 2080
+    const annualJdHours = computeHourlyFigure({ advertisedComp: 62400, isRange: false, isVariable: false, period: 'annual', jdStatedHoursPerYear: 1950 });
+    // (c) annual, JD silent on hours -> 2080 fallback
+    const annualFallback = computeHourlyFigure({ advertisedComp: 62400, isRange: false, isVariable: false, period: 'annual' });
+    // (d) monthly -> annualized first, then converted
+    const monthly = computeHourlyFigure({ advertisedComp: 5000, isRange: false, isVariable: false, period: 'monthly' });
+    // (e) comparable-amount gate: range excluded
+    const rangeSkipped = computeHourlyFigure({ advertisedComp: 17, isRange: true, isVariable: false, period: 'hourly' });
+    // (f) comparable-amount gate: variable comp (bonus/commission) excluded
+    const variableSkipped = computeHourlyFigure({ advertisedComp: 5000, isRange: false, isVariable: true, period: 'annual' });
+    // (g) null advertised_comp -> skip (pay-transparency signal's territory)
+    const nullSkipped = computeHourlyFigure({ advertisedComp: null, isRange: false, isVariable: false, period: 'hourly' });
 
-    // Behavior (a): before next_effective, row fresh -> general_rate
-    const before = selectMinWageRate(freshRow, '2026-08-06');
-    // Behavior (b): on/after next_effective -> next_rate, REGARDLESS of how
-    // old as_of is (this is exactly the case the inverted predicate broke:
-    // as_of far in the past would have wrongly forced a skip here).
-    const staleAsOfRow = { ...freshRow, as_of: '2020-01-01' };
-    const onOrAfter = selectMinWageRate(staleAsOfRow, '2026-10-01');
-    const wellAfter = selectMinWageRate(staleAsOfRow, '2027-03-01');
-    // Behavior (c): no rate covers today -> skip. Row is >12mo past as_of
-    // AND next_effective (if any) has not arrived, so only the stale
-    // general_rate would apply -> must skip instead of using it.
-    const noCoverRow = { general_rate: 15.00, next_rate: null, next_effective: null, as_of: '2020-01-01' };
-    const noCover = selectMinWageRate(noCoverRow, '2026-08-06');
-    const noCoverFutureNext = selectMinWageRate(
-      { general_rate: 15.00, next_rate: 16.00, next_effective: '2027-01-01', as_of: '2020-01-01' },
-      '2026-08-06'
-    );
-    // Behavior (d): CodeRabbit leap-day regression — 2023-03-01 to 2024-03-01
-    // is EXACTLY 12 calendar months (the span crosses the 2024-02-29 leap
-    // day, so it is 366 days). A naive days/30.44 approximation computes
-    // ~12.02 months and would wrongly flag this as stale (> 12). The UTC
-    // calendar-month comparison must treat it as exactly at the boundary —
-    // NOT yet review-due — matching check-table-freshness.mjs's own
-    // addMonthsUTC/reviewCutoff semantics (asOf < reviewCutoff, strict).
-    const exactTwelveMonthsRow = { general_rate: 15.00, next_rate: null, next_effective: null, as_of: '2023-03-01' };
-    const exactTwelveMonths = selectMinWageRate(exactTwelveMonthsRow, '2024-03-01');
+    const arithmeticOk =
+      !hourly.skip && hourly.hourly === 22.50 &&
+      !annualJdHours.skip && Math.abs(annualJdHours.hourly - 32) < 0.001 && annualJdHours.hoursBasis === 'JD-stated' &&
+      !annualFallback.skip && Math.abs(annualFallback.hourly - 30) < 0.001 && annualFallback.hoursBasis === '2080-hour fallback' &&
+      !monthly.skip && Math.abs(monthly.hourly - (60000 / 2080)) < 0.001 &&
+      rangeSkipped.skip === true &&
+      variableSkipped.skip === true &&
+      nullSkipped.skip === true;
 
-    const behaviorOk =
-      before.source === 'general_rate' && before.rate === 17.60 && !before.skip &&
-      onOrAfter.source === 'next_rate' && onOrAfter.rate === 17.95 && !onOrAfter.skip &&
-      wellAfter.source === 'next_rate' && wellAfter.rate === 17.95 && !wellAfter.skip &&
-      noCover.skip === true && noCover.rate === null &&
-      noCoverFutureNext.skip === true && noCoverFutureNext.rate === null &&
-      exactTwelveMonths.skip === false && exactTwelveMonths.source === 'general_rate' && exactTwelveMonths.rate === 15.00;
-
-    if (behaviorOk) {
-      pass('minimum-wage reference selection algorithm (as specified) correctly uses general_rate before next_effective, next_rate on/after next_effective regardless of as_of staleness, skips only when no rate covers today, and treats an exactly-12-calendar-month-old as_of (2023-03-01 -> 2024-03-01, leap-day span) as NOT yet stale via UTC calendar-month comparison matching check-table-freshness.mjs (#2027, CodeRabbit round 3)');
+    if (arithmeticOk) {
+      pass('hourly-conversion arithmetic correctly passes through hourly figures, prefers JD-stated hours over the 2080 fallback, annualizes monthly pay before converting, and the comparable-amount gate excludes ranges/variable comp/null advertised_comp (#2280)');
     } else {
-      fail(`minimum-wage reference selection algorithm produced wrong results: before=${JSON.stringify(before)} onOrAfter=${JSON.stringify(onOrAfter)} wellAfter=${JSON.stringify(wellAfter)} noCover=${JSON.stringify(noCover)} noCoverFutureNext=${JSON.stringify(noCoverFutureNext)} exactTwelveMonths=${JSON.stringify(exactTwelveMonths)} (#2027, CodeRabbit round 3)`);
+      fail(`hourly-conversion arithmetic produced wrong results: hourly=${JSON.stringify(hourly)} annualJdHours=${JSON.stringify(annualJdHours)} annualFallback=${JSON.stringify(annualFallback)} monthly=${JSON.stringify(monthly)} rangeSkipped=${JSON.stringify(rangeSkipped)} variableSkipped=${JSON.stringify(variableSkipped)} nullSkipped=${JSON.stringify(nullSkipped)} (#2280)`);
     }
+  }
 
-    // (b) directional-wording checks against the actual shipped prose, so a
-    //     reversed condition in the real files (not just this test's own
-    //     reference function) cannot pass silently. Both files must (i)
-    //     explicitly state that general_rate applies BEFORE next_effective
-    //     and next_rate applies ON OR AFTER next_effective, and (ii)
-    //     explicitly disclaim the exact bug that shipped in round 1 — that
-    //     an arrived next_effective is a skip/stale trigger. Checking for
-    //     the disclaimer (not just the positive rule, which both the buggy
-    //     and fixed prose could plausibly state elsewhere) is what makes
-    //     this resistant to a reversed skip-condition sneaking back in.
-    // Guard the read: an unreadable/missing templates/minimum-wage.yml must
-    // not throw and abort the rest of the test suite. Record exactly one
-    // fail(...) for this check and skip the dependent prose assertions below
-    // — everything after this block (and every other test group in the
-    // file) still runs (CodeRabbit round 3, #2027).
-    let mwYmlRaw = null;
-    try {
-      mwYmlRaw = readFileSync(join(ROOT, 'templates', 'minimum-wage.yml'), 'utf-8');
-    } catch (err) {
-      fail(`could not read templates/minimum-wage.yml to verify staleness-direction prose: ${err.message} (#2027, CodeRabbit round 3)`);
-    }
-
-    if (mwYmlRaw !== null) {
-      const ymlHasCorrectSelection =
-        /general_rate[\s\S]{0,60}before[\s\S]{0,60}next_effective/i.test(mwYmlRaw) &&
-        /next_rate[\s\S]{0,60}on or after[\s\S]{0,60}next_effective/i.test(mwYmlRaw);
-      const modeHasCorrectSelection =
-        /general_rate[\s\S]{0,60}before[\s\S]{0,60}next_effective/i.test(mwSection) &&
-        /next_rate[\s\S]{0,60}on or after[\s\S]{0,60}next_effective/i.test(mwSection);
-      const ymlDisclaimsInversion = /never skipped as stale/i.test(mwYmlRaw) && /already-arrived/i.test(mwYmlRaw);
-      const modeDisclaimsInversion = /never skipped as stale/i.test(mwSection) && /next_effective[\s\S]{0,20}(has\s+)?passed/i.test(mwSection);
-
-      if (ymlHasCorrectSelection && modeHasCorrectSelection && ymlDisclaimsInversion && modeDisclaimsInversion) {
-        pass('minimum-wage.yml and oferta.md correctly state general_rate-before/next_rate-on-or-after selection AND explicitly disclaim an arrived next_effective as a staleness/skip trigger — the round-1 inversion cannot silently return (#2027, CodeRabbit round 2)');
-      } else {
-        fail(`minimum-wage.yml / oferta.md staleness prose missing the corrected direction and/or the explicit anti-inversion disclaimer (yml selection=${ymlHasCorrectSelection}, mode selection=${modeHasCorrectSelection}, yml disclaims=${ymlDisclaimsInversion}, mode disclaims=${modeDisclaimsInversion}) (#2027, CodeRabbit round 2)`);
-      }
-    }
+  // 6. Signal-13 boundary check: signal 13 is the last numbered Block G
+  //    signal before "### Output format:", so slicing it for phrasing
+  //    checks elsewhere in this file must not accidentally swallow the
+  //    output-format section.
+  if (mwEnd > mwStart && mwStart >= 0) {
+    pass('signal-13 section boundary (start of signal 13 to "### Output format:") resolved correctly for slicing (#2280)');
+  } else {
+    fail('could not locate signal 13 ("**13. Minimum-Wage Lawyer Question**") or its end boundary in modes/oferta.md (#2280)');
   }
 }
 
@@ -13514,7 +13411,7 @@ console.log('\n69. Jurisdiction-prohibited content signal (#2018)');
   // sentence, the new sections must not contain employer-lawbreaking language.
   const signal9 = ofertaMode.slice(
     ofertaMode.indexOf('**12. Jurisdiction-Prohibited Content**'),
-    ofertaMode.indexOf('**13. Minimum-Wage Floor Check**')
+    ofertaMode.indexOf('**13. Minimum-Wage Lawyer Question**')
   );
   const step5c = applyMode.slice(
     applyMode.indexOf('## Step 5c — Jurisdiction-prohibited content check'),
