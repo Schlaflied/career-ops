@@ -2452,12 +2452,13 @@ if (
     !ptSection.includes('templates/pay-transparency.yml') &&
     !/13b/.test(ptSection) &&
     ptSection.includes('general heuristic') &&
+    ptSection.includes('top - bottom > 0.5 × bottom') &&
     ptSection.includes('Phrasing discipline (mandatory)') &&
     ptSection.includes('not legal advice')
   ) {
     pass('oferta Block G has the table-free, self-computed pay-transparency range-width signal (#2280)');
   } else {
-    fail('oferta Block G missing/incomplete pay-transparency range-width section — needs table-free arithmetic heuristic, "general heuristic" framing, phrasing discipline, not-legal-advice note, and no leftover table/13b references (#2280)');
+    fail('oferta Block G missing/incomplete pay-transparency range-width section — needs table-free arithmetic heuristic, "general heuristic" framing, the documented threshold formula (top - bottom > 0.5 × bottom), phrasing discipline, not-legal-advice note, and no leftover table/13b references (#2280)');
   }
 
   // Phrasing discipline holds in the report-facing text: the blockquote
