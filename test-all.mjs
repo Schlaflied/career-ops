@@ -2612,152 +2612,78 @@ if (
   fail('router skill missing offer-prep registration (or offer-prep leaked into the subagent-delegated section)');
 }
 
-// --- offer-prep statutory-context notes for sub-statutory terms (#2039) ---
-// NOTE: per CodeRabbit review on PR #2042, the table no longer stores
-// statutory floor VALUES or doctrine NARRATIVE (case names/holdings) — only
-// two structural flags (floor_categories, void_doctrine) plus a statute
-// NAME. modes/offer-prep.md computes arithmetic on the clause's own stated
-// term and routes the actual floor figure / doctrine application to a
-// lawyer question rather than asserting either as fact. Tests below cover
-// the flag-only data shape and the lawyer-question routing workflow instead
-// of asserting specific legal figures.
+// --- offer-prep sub-statutory-terms lawyer question (#2039, reworked per #2280) ---
+// santifer's direction on PR #2042 (2026-07-29, reasoning in #2280): a
+// jurisdiction table of category-regulation flags (floor_categories,
+// void_doctrine) is a live legal fact this system can never verify or
+// notice going stale, same as #2027's minimum-wage table — a stale flag
+// with a citation is worse than no flag at all. templates/statutory-
+// employment-minimums.yml is deleted entirely (no flags-only shape either).
+// modes/offer-prep.md now only restates the clause's own stated term (no
+// legal table needed) and routes the statutory-floor and voiding-doctrine
+// questions to the lawyer unconditionally, for every jurisdiction, never
+// gated on a table row. Tests below assert the table is gone and the
+// section fires the lawyer questions without any table-backed gating.
 {
-  // 1. Jurisdiction-flags table exists, parses as YAML, and the CA-ON seed
-  //    carries flags only — floor_categories + void_doctrine boolean + a
-  //    statute NAME — with no floor values or doctrine narrative anywhere
-  //    in the row.
+  // 1. The table is gone, not merely emptied.
   const semPath = join(ROOT, 'templates', 'statutory-employment-minimums.yml');
   if (!existsSync(semPath)) {
-    fail('templates/statutory-employment-minimums.yml missing (#2039)');
+    pass('templates/statutory-employment-minimums.yml deleted per maintainer direction (#2039, #2280)');
   } else {
-    try {
-      const { load } = await import('js-yaml');
-      const semRaw = readFileSync(semPath, 'utf-8');
-      const sem = load(semRaw);
-      // Validate EVERY jurisdiction row against the flag-only schema — not
-      // just CA-ON — so future rows can't sneak in floor values or doctrine
-      // narrative while the suite still passes (#2039, CodeRabbit).
-      const rows = Array.isArray(sem?.minimums) ? sem.minimums : [];
-      const allowedCategories = ['vacation', 'notice', 'severance', 'probation_limits'];
-      // Documented schema (see the file's header comment) — any key outside
-      // this set is undocumented and rejected, not silently ignored.
-      const allowedKeys = new Set([
-        'jurisdiction', 'jurisdiction_name', 'floor_categories', 'void_doctrine',
-        'legal_basis', 'sources', 'as_of',
-      ]);
-      // Explicit, semantic denylist of quantified-value / doctrine-narrative
-      // fields a row must never carry — the PRIMARY control (#2039,
-      // CodeRabbit). A `JSON.stringify(row)` regex scan is easily fooled by
-      // reworded prose or an unlisted field name; asserting the field is
-      // simply absent is not.
-      const bannedFields = [
-        'floors', 'floor', 'minimum_vacation_days', 'vacation_days',
-        'notice_weeks', 'notice_days', 'notice_months', 'severance_weeks',
-        'severance_days', 'severance_formula', 'probation_days',
-        'probation_months', 'doctrine_holding', 'doctrine_name', 'holding',
-        'case_name', 'doctrine_narrative',
-      ];
-      const rowFailures = [];
-      for (const row of rows) {
-        const rowKeys = row ? Object.keys(row) : [];
-        const unknownKeys = rowKeys.filter((k) => !allowedKeys.has(k));
-        const bannedPresent = bannedFields.filter((k) => row && Object.prototype.hasOwnProperty.call(row, k));
-        const sources = row?.sources;
-        // Secondary belt-and-suspenders sweep for doctrine narrative prose
-        // that wouldn't be caught by a field-name check (e.g. holding text
-        // pasted into `legal_basis` instead of a proper field) — supplements,
-        // never substitutes for, the semantic field checks above.
-        const rowText = row ? JSON.stringify(row) : '';
-        const ok = Boolean(
-          row &&
-          typeof row.jurisdiction === 'string' && row.jurisdiction.length > 0 &&
-          typeof row.jurisdiction_name === 'string' && row.jurisdiction_name.length > 0 &&
-          Array.isArray(row.floor_categories) &&
-          row.floor_categories.every((c) => allowedCategories.includes(c)) &&
-          (row.void_doctrine === undefined || typeof row.void_doctrine === 'boolean') &&
-          typeof row.legal_basis === 'string' && row.legal_basis.length > 0 &&
-          Array.isArray(sources) && sources.length > 0 &&
-          sources.every((s) => typeof s === 'string' && s.trim().length > 0) &&
-          typeof row.as_of === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.as_of) &&
-          unknownKeys.length === 0 &&
-          bannedPresent.length === 0 &&
-          // no floor VALUES or doctrine NARRATIVE anywhere in the row — a
-          // bare case-name/statute citation in `sources` is fine (that's
-          // the point of #2039's citable-source requirement); what's
-          // banned is stating the current figure or narrating a holding.
-          !/\d+\s*(weeks?|days?|months?)/i.test(rowText) &&
-          !/wilful.misconduct standard|void(s|ed)? the (entire|whole)|the current (statutory )?(floor|minimum) is/i.test(rowText)
-        );
-        if (!ok) rowFailures.push(row?.jurisdiction || '(row missing jurisdiction)');
-      }
-      const caOn = rows.find((r) => r?.jurisdiction === 'CA-ON');
-      const caOnCategories = Array.isArray(caOn?.floor_categories) ? caOn.floor_categories : [];
-      if (
-        rows.length > 0 &&
-        rowFailures.length === 0 &&
-        caOn &&
-        allowedCategories.every((k) => caOnCategories.includes(k)) &&
-        caOn.void_doctrine === true
-      ) {
-        pass('statutory-employment-minimums.yml parses; every jurisdiction row (incl. CA-ON: floor_categories vacation/notice/severance/probation_limits, void_doctrine: true) matches the flag-only schema — statute-name legal_basis, sources, quoted-string as_of, and NO floor values or doctrine narrative anywhere (#2039, CodeRabbit)');
-      } else {
-        fail(`statutory-employment-minimums.yml row(s) do not match the flag-only schema (offending: ${rowFailures.join(', ') || 'CA-ON seed shape'}) — every row needs an allowlisted floor_categories, boolean void_doctrine, a statute-name legal_basis, sources, quoted-string as_of, and must NOT carry floor values or doctrine narrative (case holdings) (#2039, CodeRabbit)`);
-      }
-      if (
-        semRaw.includes('CONTRIBUTION RULE') &&
-        semRaw.includes('ABSENT-CATEGORY SEMANTICS') &&
-        semRaw.includes('stays SILENT') &&
-        semRaw.includes('NOT LEGAL ADVICE') &&
-        semRaw.includes('WHY NO FLOOR VALUES OR DOCTRINE NARRATIVE')
-      ) {
-        pass('statutory-employment-minimums.yml header documents the contribution rule, absent-category-means-silence semantics, not-legal-advice boundary, and the no-values/no-narrative rationale (#2039, CodeRabbit)');
-      } else {
-        fail('statutory-employment-minimums.yml header missing the contribution rule, absent-category semantics, not-legal-advice note, and/or the no-floor-values/no-doctrine-narrative rationale (#2039, CodeRabbit)');
-      }
-    } catch (e) {
-      fail(`templates/statutory-employment-minimums.yml does not parse as YAML: ${e.message} (#2039)`);
-    }
+    fail('templates/statutory-employment-minimums.yml should be deleted entirely per #2280 — a live legal fact this system cannot verify or notice going stale, same reasoning as #2027s minimum-wage table');
   }
 
-  // 2. offer-prep carries the sub-statutory-terms subsection with both
-  //    output integrations (clause-tag note + lawyer questions) routing to
-  //    the lawyer rather than asserting a floor value or doctrine holding,
-  //    the floors-absent silence rule, and the never-assert hard rule.
-  const semStart = offerPrepMode.indexOf('Statutory-context notes for sub-statutory terms');
+  // templates/README.md carries no row for the deleted table.
+  const templatesReadme = readFile('templates/README.md');
+  if (!templatesReadme.includes('statutory-employment-minimums.yml')) {
+    pass('templates/README.md carries no row for the deleted statutory-employment-minimums.yml (#2280)');
+  } else {
+    fail('templates/README.md still references statutory-employment-minimums.yml, which was deleted per #2280');
+  }
+
+  // 2. offer-prep carries the sub-statutory-terms subsection, reworked to
+  //    route unconditionally to the lawyer list with no table lookup, no
+  //    floor_categories/void_doctrine gating, and no reintroduced ESA
+  //    figures or Waksdale narrative.
+  const semStart = offerPrepMode.indexOf('Sub-statutory-terms lawyer question');
   const semEnd = offerPrepMode.indexOf('## Step 3', Math.max(semStart, 0));
   const semSection = semStart >= 0 && semEnd > semStart ? offerPrepMode.slice(semStart, semEnd) : '';
   if (
-    semSection.includes('templates/statutory-employment-minimums.yml') &&
-    semSection.includes('statutory-context note') &&
     semSection.includes('Questions for your lawyer') &&
-    semSection.includes('Floors-absent silence (mandatory)') &&
-    semSection.includes('no output') &&
-    /Never assert a floor value, doctrine holding, voidness, or violation\s+\(HARD RULE\)/.test(semSection) &&
+    semSection.includes('#2280') &&
+    /gone and is not coming back in any shape/.test(semSection) &&
+    /Never assert a floor value, a regulation flag, a doctrine holding,\s+voidness, or violation\s+\(HARD RULE\)/.test(semSection) &&
     semSection.includes('always a lawyer question') &&
-    semSection.includes('not legal advice') &&
-    /not\*\*\s+online/.test(semSection) &&
     semSection.includes('Render in {language.output}') &&
-    semSection.includes('floor_categories') &&
-    semSection.includes('void_doctrine') &&
-    /no severance-amount calculations,\s+no floor-figure statements/.test(semSection) &&
+    /no floor-figure statements,\s+no regulation-flag statements/.test(semSection) &&
     /never computes, estimates, or\s+ranges a notice or severance amount/.test(semSection) &&
+    // must NOT reference the deleted table's path, or gate any behavior on
+    // its removed flag fields — `floor_categories`/`void_doctrine` may each
+    // appear at most once, in the single historical sentence explaining
+    // what the deleted table used to carry (not as active gating logic).
+    !semSection.includes('templates/statutory-employment-minimums.yml') &&
+    (semSection.match(/floor_categories/g) || []).length <= 1 &&
+    (semSection.match(/void_doctrine/g) || []).length <= 1 &&
+    !semSection.includes('Floors-absent silence') &&
+    !semSection.includes('floorMatch') &&
+    !semSection.includes('voidDoctrineMatch') &&
     // must NOT reintroduce the removed floor value / doctrine narrative, and
     // must NOT reintroduce a named case/doctrine (e.g. Bardal) as a factor
-    // list or asserted holding — a bare case citation belongs only in the
-    // YAML `sources` field, never narrated in the mode's own prose
+    // list or asserted holding — a bare case citation belongs only in
+    // restrictive-covenants.yml's own `sources` field, never narrated here
     !/2 weeks|3 weeks|8 weeks|26 weeks/.test(semSection) &&
     !/Waksdale|ONCA 391|wilful.misconduct standard|Bardal/i.test(semSection)
   ) {
-    pass('offer-prep sub-statutory-terms subsection pins flag-only table lookup, tag-note + lawyer-question routing (no asserted floor value/doctrine holding), floors-absent silence, never-assert hard rule, no-research reaffirmation, i18n rendering, no-calculations non-goal without a named-case factor list — and carries no reintroduced statutory figures or doctrine narrative (#2039, CodeRabbit)');
+    pass('offer-prep sub-statutory-terms subsection documents the table deletion per #2280, routes unconditionally to lawyer questions with no table lookup or category/doctrine gating, never-assert hard rule, {language.output} rendering, no-calculations non-goal — and carries no reintroduced statutory figures or doctrine narrative (#2039, #2280)');
   } else {
-    fail('offer-prep sub-statutory-terms subsection missing/incomplete, or still asserts a specific floor value / doctrine holding — needs flag-only table reference, statutory-context note + lawyer-question routing, floors-absent silence rule, the floor-value/doctrine never-assert hard rule, local-lookup-is-not-research clarification, {language.output} rendering, no-severance-calculations non-goal, and must not restate the removed ESA figures or Waksdale narrative (#2039, CodeRabbit)');
+    fail('offer-prep sub-statutory-terms subsection missing/incomplete, or still asserts a specific floor value / regulation flag / doctrine holding, or still gates on a table lookup — needs the #2280 table-deletion rationale, unconditional lawyer-question routing, the floor-value/flag/doctrine never-assert hard rule, {language.output} rendering, no-calculations non-goal, and must not restate the removed ESA figures or Waksdale narrative (#2039, #2280)');
   }
 
-  // 3. Lawyer-question workflow: both the generic floor-category question
-  //    and the void_doctrine-conditioned question are present, each
-  //    explicitly asking the lawyer for the current figure/effect rather
-  //    than the mode asserting one, and each routed through
-  //    {language.output} rendering at the presentation boundary.
+  // 3. Lawyer-question workflow: both the floor question and the
+  //    doctrine-directed question are present, fire unconditionally (no
+  //    table-flag gating), explicitly ask the lawyer for the current
+  //    figure/effect rather than the mode asserting one, and are routed
+  //    through {language.output} rendering at the presentation boundary.
   const semLawyerBlock = semSection.slice(
     Math.max(0, semSection.indexOf('Questions for your lawyer')),
     semSection.indexOf('candidate-empowering angle') > 0
@@ -2765,30 +2691,28 @@ if (
       : undefined
   );
   if (
-    /what is the current statutory minimum/i.test(semLawyerBlock) &&
+    /at or above the statutory minimum/i.test(semLawyerBlock) &&
     /does this clause meet it/i.test(semLawyerBlock) &&
-    /void_doctrine: true/.test(semLawyerBlock) &&
     /could void the whole clause/i.test(semLawyerBlock) &&
+    !/void_doctrine: true/.test(semLawyerBlock) &&
     (semLawyerBlock.match(/Render in \{language\.output\}/g) || []).length >= 2
   ) {
-    pass('sub-statutory-terms lawyer-question workflow generates both the generic floor-category question and the void_doctrine-conditioned question, each asking the lawyer for the current figure/effect (never asserting one) and each rendered via [Render in {language.output}] at the presentation boundary (#2039, CodeRabbit)');
+    pass('sub-statutory-terms lawyer-question workflow generates both the statutory-floor question and the doctrine-directed question unconditionally (no table-flag gating), each asking the lawyer for the current figure/effect (never asserting one) and each rendered via [Render in {language.output}] at the presentation boundary (#2039, #2280)');
   } else {
-    fail('sub-statutory-terms lawyer-question workflow incomplete — needs a generic floor-category question asking the lawyer for the current statutory minimum, a void_doctrine-conditioned question about whether a defect could void the whole clause, and both rendered via [Render in {language.output}] (#2039, CodeRabbit)');
+    fail('sub-statutory-terms lawyer-question workflow incomplete — needs a statutory-floor question asking the lawyer for the current minimum, a doctrine-directed question about whether a defect could void the whole clause, both firing unconditionally with no void_doctrine table-flag gating, and both rendered via [Render in {language.output}] (#2039, #2280)');
   }
 
-  // 4. Phrasing discipline holds in the report-facing text: the blockquote
-  //    template may flag that a jurisdiction regulates a topic, but must
-  //    never assert a specific floor value, a doctrine holding, or a
-  //    verdict about the candidate's own clause. Only '>' lines (rendered
-  //    output templates) are scanned, and only for clause-directed
-  //    assertions (the #2021/#2027/#2028/#2039 scoping move).
+  // 4. Phrasing discipline holds in the report-facing text: no rendered
+  //    output template may assert a specific floor value, a regulation
+  //    flag, a doctrine holding, or a verdict about the candidate's own
+  //    clause. Only '>' lines (rendered output templates) are scanned.
   const semQuoteLines = semSection.split('\n').filter((l) => l.trimStart().startsWith('>'));
   const semAssertive = semQuoteLines.filter((l) =>
     /(this|your|the candidate'?s?) (specific )?(clause|provision|term|contract) (is|would be|will be) (void|illegal|unenforceable|invalid|below the (statutory )?floor|in violation)/i.test(l)
   );
   const semFigureLeak = semQuoteLines.filter((l) => /Waksdale|ONCA 391|\b2 weeks\b|\b8 weeks\b|\b26 weeks\b/i.test(l));
   if (semSection && semQuoteLines.length >= 1 && semAssertive.length === 0 && semFigureLeak.length === 0) {
-    pass('sub-statutory-terms statutory-context template states clause arithmetic + regulation flags only — no void/illegal/unenforceable/below-the-floor assertions and no reintroduced statutory figures or doctrine names in the candidate\'s clause (#2039, CodeRabbit)');
+    pass('sub-statutory-terms rendered templates state only the clause\'s own term + the lawyer question — no void/illegal/unenforceable/below-the-floor assertions and no reintroduced statutory figures or doctrine names (#2039, #2280)');
   } else {
     fail(`sub-statutory-terms phrasing discipline broken: ${semAssertive.length ? `clause-directed verdict in blockquote: ${semAssertive[0].trim().slice(0, 80)}` : semFigureLeak.length ? `reintroduced statutory figure/doctrine name in blockquote: ${semFigureLeak[0].trim().slice(0, 80)}` : 'expected a blockquote output template in the section'} (#2039)`);
   }

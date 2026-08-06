@@ -30,17 +30,17 @@ It is NOT:
   figures must never appear in an outbound query of any kind.
 - **Never state law from memory.** Jurisdiction-dependent legal questions
   become entries in the Questions-for-your-lawyer list — never answered
-  inline, never guessed. The sanctioned sources of statutory facts are
+  inline, never guessed. The sole sanctioned source of statutory facts is
   `templates/restrictive-covenants.yml` (a verified, cited, local data
-  table — see the statutory-context subsection in Step 2) and, narrowly,
-  `templates/statutory-employment-minimums.yml` — but only for its two
-  structural flags (`floor_categories`, `void_doctrine` booleans) and the
-  statute-name `legal_basis` pointer. Current statutory floor VALUES,
-  doctrine HOLDINGS, and any clause-specific legal conclusion are never
-  sanctioned, from either table or from memory, and stay lawyer questions
-  even when a table's flags are consulted. Reading either table is a local
-  file lookup, not online research and not memory. Anything not covered by
-  these narrow carve-outs stays a lawyer question.
+  table — see the statutory-context subsection in Step 2). Sub-statutory
+  terms (vacation/PTO, notice, severance, probation) carry no such table
+  (see #2280): statutory floor figures, category-regulation flags, and
+  whole-provision-voiding doctrines all change on a timeline this mode
+  cannot track and cannot verify, so they are never stated from a table or
+  from memory — they are lawyer questions, full stop. Reading
+  `restrictive-covenants.yml` is a local file lookup, not online research
+  and not memory. Anything not covered by that one narrow carve-out stays a
+  lawyer question.
 - **Never headless.** This mode must not run in batch/headless mode
   (`claude -p`, batch workers, subagents). It requires an attending human.
   The repo's batch conventions explicitly do not apply here.
@@ -119,13 +119,13 @@ jurisdiction and route it to the lawyer list as a question; it may never
 assert what any law requires, permits, or prohibits. Content-level
 statements ("{state} requires X", "this is unenforceable") are banned. The
 `[commonly negotiated]` tag is a negotiation-norms meta-statement and is
-fine. Two narrow, table-backed carve-outs exist: statutory facts drawn
-verbatim-close from `templates/restrictive-covenants.yml`, and the
-structural flags (`floor_categories`, `void_doctrine`, statute-name
-`legal_basis`) from `templates/statutory-employment-minimums.yml`, may be
-relayed with their citation as statutory-context notes (rules in Step 2)
-— but statements about what the law means for **this** clause, and any
-current floor value or doctrine holding, remain banned everywhere.
+fine. One narrow, table-backed carve-out exists: statutory facts drawn
+verbatim-close from `templates/restrictive-covenants.yml`, relayed with
+their citation as statutory-context notes (rules in Step 2) — but
+statements about what the law means for **this** clause remain banned
+everywhere. Sub-statutory terms (vacation, notice, severance, probation)
+get no table-backed carve-out at all (see #2280): every such topic routes
+straight to a lawyer question, described further in Step 2.
 
 ## Step 2 — Clause walk (describe, don't judge)
 
@@ -254,160 +254,111 @@ No enforceability opinions, no negotiation-leverage claims, no verdicts —
 the describes-never-judges posture is unchanged. Statutory-context notes
 are context, not legal advice.
 
-### Statutory-context notes for sub-statutory terms (#2039)
+### Sub-statutory-terms lawyer question (#2039, reworked per #2280)
 
 Employment-standards law sets **floors** under offer terms — minimum
 vacation, minimum termination notice, severance entitlements, limits on
-probation language — and a clause drafted below the floor does not lower
-it. Candidates read such clauses as "the deal" without knowing a floor
-might exist beneath them. This subsection adds jurisdiction-aware
-**statutory-context flagging** to the clause walk without changing the
-mode's posture: it states arithmetic facts about the clause **itself**
-(what the clause says, computed from the clause's own stated terms — the
-same kind of math the rest of this mode already does) and, separately,
-flags that the jurisdiction is known to regulate this topic — then routes
-the actual floor figure and its application to a lawyer question. It never
-states what the current floor number is, never narrates a doctrine's
-holding, and never judges the candidate's clause.
+probation language, and in some jurisdictions a doctrine under which a
+defect elsewhere in a termination clause can void the whole provision — and
+a clause drafted below the floor does not lower it. Candidates read such
+clauses as "the deal" without knowing a floor, or a voiding doctrine, might
+sit beneath them.
 
-**Lookup:** when the Step 2 walk reaches a clause stating a quantified term
-in a floor-bearing family — vacation or PTO (taxonomy category 9),
-termination notice, severance, or probation (category 3) — check
-`templates/statutory-employment-minimums.yml` for a row matching the
-jurisdiction derived in Step 1 (candidate's location from
-`config/profile.yml`; a named work location in the contract wins if it
-contradicts). The table is a data reference, not instruction logic — adding
-a jurisdiction row there never requires touching this rule text. By design,
-every row carries only two structural **flags** — `floor_categories` (which
-clause families the jurisdiction is known to regulate at all) and
-`void_doctrine` (whether the jurisdiction has any whole-provision-voiding
-doctrine for termination clauses) — plus a `legal_basis` (the governing
-statute's name only), sources, and an `as_of` verification date. The table
-never carries a floor VALUE or a doctrine NARRATIVE (case name, holding, or
-case line): those change on a timeline no static table can track, and
-storing them would hand this mode apparent authority over what the law
-currently says. Reading the table is a local file lookup — it is **not**
-online research, and the no-online-research hard guard is unchanged: no
-WebSearch, no WebFetch, no URL visits, ever. This table's flags are the
-narrow, sanctioned carve-out of the "Never state law from memory" hard
-guard described above — and the carve-out stops at the flags: the mode
-never states what a statute currently requires or what a doctrine
-currently holds. It only states its own arithmetic on the clause's stated
-terms, plus the flag that the topic is regulated in this jurisdiction, and
-then routes the substantive legal question (the current floor figure,
-whether a doctrine applies to this contract) to the lawyer list.
+An earlier version of this subsection carried a jurisdiction table of
+category-regulation flags (`floor_categories`, `void_doctrine`). Per
+maintainer direction on PR #2042 (santifer, 2026-07-29, reasoning in
+**#2280**), that table is gone and is not coming back in any shape —
+including a flags-only shape. The reasoning: whether a jurisdiction
+regulates a given category at all, and whether it carries a
+whole-provision-voiding doctrine, are both facts that change when
+legislatures amend statutes or courts revisit case law. This mode has no
+way to notice either going stale, and a stale flag with a citation attached
+is worse than no flag at all — the citation is what makes someone believe
+it. So this subsection now does only the part that needs no legal table:
+restating the clause's own stated term in plain language, and routing the
+actual statutory question to the lawyer list, unconditionally, for every
+jurisdiction — never gated on a table row that might itself be stale.
 
-**Floors-absent silence (mandatory):** a category is flagged only where the
-jurisdiction is actually known to regulate it. If the table has no row for
-the Step 1 jurisdiction, or the row's `floor_categories` does not include
-the clause family being walked (the US-federal vacation case: no category
-flagged), this subsection produces **no output** for that clause — an
-absent flag means silence, never a warning — and the standard Step 1
-meta-statement boundary applies unchanged (topic → lawyer list, no law
-stated).
+**Trigger:** when the Step 2 walk reaches a clause in a floor-bearing
+family — vacation or PTO (taxonomy category 9), termination notice,
+severance, or probation (category 3) — this subsection fires for **every**
+such clause, in every jurisdiction, with no table lookup and no
+per-jurisdiction gating. There is no "floors-absent silence" case anymore:
+since nothing here asserts that a jurisdiction regulates a category, there
+is nothing that requires suppressing when it might not.
 
-**Two distinct match conditions (never merged into one):**
-
-- **`floorMatch`** — the walked clause states a quantified term in a
-  category that is present in the jurisdiction row's `floor_categories`.
-- **`voidDoctrineMatch`** — the walked clause is a termination provision
-  AND the jurisdiction row carries `void_doctrine: true` — regardless of
-  whether that termination clause states a quantified term.
-
-These are evaluated independently. A termination clause with no quantified
-notice or severance term, walked in a `void_doctrine: true` jurisdiction,
-is a `voidDoctrineMatch` **only** — it is not a `floorMatch`, because there
-is no quantified term to compute clause arithmetic on. Floors-absent
-silence (above) still governs `floorMatch`: if `floor_categories` doesn't
-cover the clause's category, `floorMatch` is false no matter what
-`voidDoctrineMatch` evaluates to.
-
-**On `floorMatch` — inside existing output shapes:**
+**On every quantified floor-bearing clause — inside existing output
+shapes:**
 
 1. The clause's neutral tags (which always include `[ask your lawyer]` in
-   this situation) gain a **statutory-context note** — an arithmetic fact
-   about the clause's own stated term, plus the regulation flag, never a
-   floor value and never a verdict about this clause. Template:
+   this situation) gain no additional statutory-context note — there is no
+   table-backed regulation flag left to state. The clause is simply tagged
+   and its own term is what the lawyer question (below) restates.
 
-   > **Statutory context:** [Render in {language.output}: state the
-   > arithmetic fact about the clause's own stated term, then flag that the
-   > jurisdiction regulates this category — with the statute's name, no
-   > figure — e.g. for a fictional Acme Corp offer in Ontario: "This clause
-   > states 10 days of paid vacation. Ontario's Employment Standards Act,
-   > 2000 sets a statutory minimum for vacation entitlement — the current
-   > figure isn't stated here because published floors change and this
-   > tool doesn't track point-in-time legal figures." If the row's `as_of`
-   > date is not recent, add: "this table's regulation flag was last
-   > verified {as_of}; verify the jurisdiction still regulates this topic
-   > the same way." Close with: what the current floor is, and whether it
-   > reaches this specific clause, are questions for the lawyer list below.
-   > This is a statutory-context flag, not legal advice.]
+2. The **Questions for your lawyer** list gains a question built only from
+   the clause's own stated term and the Step 1 jurisdiction — both facts
+   this mode already has without any legal table — rendered in
+   `{language.output}` (semantic template; only the clause's own term and
+   the jurisdiction name are facts to preserve, nothing else is verbatim
+   text to copy):
 
-2. The **Questions for your lawyer** list gains the generic floor
-   question, rendered in `{language.output}` — the English wording below
-   is a semantic template for the question's content, never text to copy
-   verbatim (the clause's own stated term stays as-is; nothing else in the
-   template is a fact to preserve verbatim, since no floor value is stored
-   to begin with):
-   - e.g. for the fictional Acme Corp offer above: [Render in {language.output}: "This clause states 10 vacation days. What is the current statutory minimum for vacation in Ontario, and does this clause meet it — or does the floor apply regardless of what the
-     clause says?"]
+   > [Render in {language.output}: "This clause states 10 days of paid
+   > vacation. Is that at or above the statutory minimum for vacation in
+   > Ontario, and does this clause meet it — or does the floor apply
+   > regardless of what the clause says?"] (fictional Acme Corp offer in
+   > Ontario, for illustration)
 
-**On `voidDoctrineMatch` — inside existing output shapes:**
+**On every termination clause (quantified or not) — inside existing output
+shapes:** the **Questions for your lawyer** list also gains a
+doctrine-directed question, asked unconditionally in every jurisdiction —
+never gated on a table flag, since no such flag exists anymore — and never
+naming a case or asserting an effect:
 
-When the row carries `void_doctrine: true` and the walked clause is a
-termination provision, the **Questions for your lawyer** list gains the
-doctrine-directed question, rendered in `{language.output}` — generic to
-any jurisdiction with the flag set, never naming a case or asserting an
-effect: [Render in {language.output}: "Does this jurisdiction have a
-doctrine under which a defect elsewhere in this termination provision —
-even in a part that's never invoked — could void the whole clause? If so,
-does anything here trigger it, and what would that mean for my notice or
-severance?"]
+> [Render in {language.output}: "Does this jurisdiction have a doctrine
+> under which a defect elsewhere in this termination provision — even in a
+> part that's never invoked — could void the whole clause? If so, does
+> anything here trigger it, and what would that mean for my notice or
+> severance?"]
 
-No statutory-context note and no generic floor question are produced for a
-`voidDoctrineMatch` that is not also a `floorMatch` — there is no quantified
-term to state clause arithmetic about, and producing either would be
-exactly the unsupported-arithmetic / unrelated-floor-question failure mode
-this split exists to prevent.
+Both questions can appear for the same clause (a termination clause that
+also states a quantified notice term generates both the floor question and
+the doctrine question) — they are independent, not alternatives.
 
-**When a clause is both a `floorMatch` and a `voidDoctrineMatch`** (e.g. a
-termination clause that states a quantified notice term, walked in a
-jurisdiction whose row carries `void_doctrine: true`): both blocks above
-fire — the statutory-context note, the generic floor question, **and** the
-doctrine-directed question all appear for that one clause. The two match
-conditions are independent triggers, not alternatives; nothing about
-satisfying one suppresses the other.
+**The candidate-empowering angle (a question, not an asserted effect):**
+for every termination clause, also ask the lawyer directly whether a
+voiding doctrine — if one exists in this jurisdiction — could work in the
+candidate's favor here:
 
-**The candidate-empowering angle (a question, not an asserted effect):** in
-jurisdictions with a whole-provision-voiding doctrine flagged, ask the
-lawyer directly whether that doctrine could work in the candidate's favor
-here — [Render in {language.output}: "If this termination provision has a
-defect that voids it, could that end up better for me than what the
-clause says — for example by falling back to broader protection? Is that
-worth exploring, or does it cut the other way in my situation?"] — never a
-reason on its own to reject the offer, and never an effect, holding, or
-doctrine name this mode states or resolves itself.
+> [Render in {language.output}: "If this termination provision has a
+> defect that voids it, could that end up better for me than what the
+> clause says — for example by falling back to broader protection? Is that
+> worth exploring, or does it cut the other way in my situation?"]
 
-**Never assert a floor value, doctrine holding, voidness, or violation
-(HARD RULE):** this mode never states what a jurisdiction's current
-statutory floor number is, never narrates what a voiding doctrine holds or
-which case established it, and never asserts that the candidate's clause
-is void, illegal, unenforceable, or in violation of a statute. The table
-supplies only flags — that a category is regulated, that a voiding
-doctrine of some kind exists — never the figure or the holding, and never
-whether either reaches **this** document. Application to a specific clause,
-including the current legal figure itself, is always a lawyer question.
-Statutory-context notes are a flag to ask about, not legal advice.
+Never a reason on its own to reject the offer, and never an effect,
+holding, doctrine name, or jurisdiction-regulates-this-category claim this
+mode states or resolves itself.
 
-**Non-goal — no severance-amount calculations, no floor-figure statements:**
-common-law reasonable notice depends on factors no table can hold, and
-current statutory floor figures depend on amendments and indexation that
-no static table can hold either. This mode never computes, estimates, or
+**Never assert a floor value, a regulation flag, a doctrine holding,
+voidness, or violation (HARD RULE):** this mode never states what a
+jurisdiction's current statutory floor number is, never states whether a
+jurisdiction regulates a given category at all, never narrates what a
+voiding doctrine holds or which case established it, and never asserts
+that the candidate's clause is void, illegal, unenforceable, or in
+violation of a statute. All of that — including whether the topic is
+regulated here in the first place — is always a lawyer question, asked
+unconditionally rather than backed by any local table.
+
+**Non-goal — no severance-amount calculations, no floor-figure statements,
+no regulation-flag statements:** common-law reasonable notice depends on
+factors no table can hold, and current statutory floor figures and
+category-regulation status depend on amendments and case law that no
+static table can hold either. This mode never computes, estimates, or
 ranges a notice or severance amount, and never states what a
-jurisdiction's floor number currently is — "what is the current statutory
-minimum, and does this clause meet it?" is written into the lawyer
-question precisely because only a lawyer (or the current government
-source) can answer it.
+jurisdiction's floor number currently is or whether a jurisdiction
+regulates a topic at all — "is that at or above the statutory minimum" and
+"does this jurisdiction have a doctrine..." are written into the lawyer
+questions precisely because only a lawyer (or the current government
+source) can answer them.
 
 ## Step 3 — Consistency check
 
