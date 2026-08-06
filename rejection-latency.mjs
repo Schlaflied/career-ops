@@ -196,10 +196,18 @@ export function computeRejectionLatency(interviewRows, trackerByCompany, opts = 
   const rows = Array.isArray(interviewRows) ? interviewRows : [];
   const tracker = trackerByCompany instanceof Map ? trackerByCompany : new Map();
 
-  // Latest interview date per APPLICATION — keyed by (company, role), both
-  // case/punctuation-insensitive — so a resolved application never borrows
-  // an unrelated same-company application's interview date (or vice versa).
-  const byApplication = new Map();
+  // Resolve each interview row to its tracker application FIRST, then
+  // aggregate using the tracker's own stable row number(s) as the grouping
+  // key — NOT normalized interview-row role text. Grouping by role text
+  // meant two spelling variants of the same role at the same tracker
+  // application ("Senior Data Engineer" vs "Sr Data Engineer") built two
+  // separate aggregates instead of one, because their normalized text
+  // differed even though role-matcher.mjs's fuzzy match resolves both to
+  // the identical tracker row. Keying by `r.num` instead means any set of
+  // interview rows that resolve to the same tracker application always
+  // collapses into a single flag, regardless of how the role was spelled
+  // on each individual interview-round line (#2014 CodeRabbit).
+  const byApplication = new Map(); // key: sorted tracker row numbers joined with ','
   const companiesSeen = new Set();
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue;
@@ -217,48 +225,55 @@ export function computeRejectionLatency(interviewRows, trackerByCompany, opts = 
     companiesSeen.add(cKey);
 
     const role = findColumn(row, 'role').trim();
-    const appKey = `${cKey}::${companyKey(role)}`;
-    if (!byApplication.has(appKey)) {
-      byApplication.set(appKey, { company, role, lastDate: null });
+
+    const companyRows = tracker.get(cKey);
+    if (!companyRows || companyRows.length === 0) {
+      // No tracker row still in Interview state for this company at all →
+      // either a response was recorded (Responded/Offer/Rejected — nothing
+      // to flag) or the company isn't tracked. Only the latter is worth a
+      // warning, but the two are indistinguishable here without
+      // re-scanning all statuses — stay silent rather than warn on every
+      // resolved application.
+      continue;
     }
-    const entry = byApplication.get(appKey);
-    if (!entry.lastDate || date > entry.lastDate) entry.lastDate = date;
+
+    // Role join: exact normalized match or role-matcher fuzzy match. An
+    // interview row without a role falls back to company-level matching
+    // (there is nothing to disambiguate against).
+    const roleKey = companyKey(role);
+    const trackerRows = roleKey
+      ? companyRows.filter(r => companyKey(r.role) === roleKey || roleFuzzyMatch(role, r.role))
+      : companyRows;
+
+    if (trackerRows.length === 0) {
+      // Elapsed days for THIS row only — the role-mismatch warning is only
+      // worth surfacing when this row's own silence would clear the
+      // courtesy threshold; a role mismatch on a 3-day-old interview
+      // carries no latency signal and would just be noise.
+      const daysRow = daysBetween(date, today);
+      if (daysRow > courtesyDays) {
+        warnings.push(`"${company}" has tracker row(s) still in Interview state, but none match the interviewed role "${role}" — skipped (check role naming between data/active-interviews.md and data/applications.md).`);
+      }
+      continue;
+    }
+
+    const appKey = trackerRows.map(r => r.num).sort((a, b) => a - b).join(',');
+    if (!byApplication.has(appKey)) {
+      byApplication.set(appKey, { company, role, lastDate: date, trackerRows });
+    } else {
+      const entry = byApplication.get(appKey);
+      if (date > entry.lastDate) {
+        entry.lastDate = date;
+        entry.role = role; // keep the role text from the most recent interview row
+      }
+    }
   }
 
   const todayStr = isoDay(today);
   const flags = [];
   for (const entry of byApplication.values()) {
-    const companyRows = tracker.get(companyKey(entry.company));
-    if (!companyRows || companyRows.length === 0) {
-      // No tracker row still in Interview state → either a response was
-      // recorded (Responded/Offer/Rejected — nothing to flag) or the company
-      // isn't tracked at all. Only the latter is worth a warning, but the
-      // two are indistinguishable here without re-scanning all statuses —
-      // stay silent rather than warn on every resolved application.
-      continue;
-    }
-
-    // Elapsed days first — the role-mismatch warning below is only worth
-    // surfacing when the silence would actually clear the courtesy
-    // threshold; a role mismatch on a 3-day-old interview carries no
-    // latency signal and would just be noise.
     const daysAll = daysBetween(entry.lastDate, today);
     if (daysAll < 0) continue; // interview is in the future
-
-    // Role join: exact normalized match or role-matcher fuzzy match. An
-    // interview row without a role falls back to company-level matching
-    // (there is nothing to disambiguate against).
-    const roleKey = companyKey(entry.role);
-    const trackerRows = roleKey
-      ? companyRows.filter(r => companyKey(r.role) === roleKey || roleFuzzyMatch(entry.role, r.role))
-      : companyRows;
-    if (trackerRows.length === 0) {
-      if (daysAll > courtesyDays) {
-        warnings.push(`"${entry.company}" has tracker row(s) still in Interview state, but none match the interviewed role "${entry.role}" — skipped (check role naming between data/active-interviews.md and data/applications.md).`);
-      }
-      continue;
-    }
-
     if (daysAll <= courtesyDays) continue;
 
     const reason = `${daysAll} days post-interview silence exceeds the ${courtesyDays}-day courtesy threshold`;
@@ -266,7 +281,7 @@ export function computeRejectionLatency(interviewRows, trackerByCompany, opts = 
     flags.push({
       company: entry.company,
       role: entry.role,
-      trackerNums: trackerRows.map(r => r.num),
+      trackerNums: entry.trackerRows.map(r => r.num),
       lastInterviewDate: isoDay(entry.lastDate),
       daysSinceLastInterview: daysAll,
       tier: 'courtesy',
@@ -365,6 +380,8 @@ function runSelfTest() {
     '| Wayne Corp | Analyst | Round 1 | 2026-04-01 | Panel | Done | this application was later rejected |',
     '| Initrode | Senior Data Engineer | Round 1 | 2026-05-01 | Panel | Done | tracker spells the role Sr Data Engineer |',
     '| Soylent Corp | Analyst | Round 1 | 2026-07-15 | Panel | Done | recent interview, role mismatch expected |',
+    '| Massive Dynamic | Senior Data Engineer | Round 1 | 2026-05-01 | Panel | Done | fuzzy-spelling variant, round 1 |',
+    '| Massive Dynamic | Sr Data Engineer | Round 2 | 2026-06-01 | Panel | Done | fuzzy-spelling variant, round 2 — must aggregate with round 1 |',
   ].join('\r\n'); // CRLF on purpose — parsing must normalize
 
   const trackerMd = [
@@ -382,6 +399,7 @@ function runSelfTest() {
     '| 8 | 2026-03-05 | Wayne Corp | Designer | 3.9/5 | Interview | ❌ | — | different application, never interviewed |',
     '| 9 | 2026-04-01 | Initrode | Sr Data Engineer | 4.3/5 | Interview | ❌ | — | role spelled differently |',
     '| 10 | 2026-06-01 | Soylent Corp | Coordinator | 3.7/5 | Interview | ❌ | — | different role from the interview |',
+    '| 11 | 2026-04-01 | Massive Dynamic | Data Engineer | 4.0/5 | Interview | ❌ | — | single tracker application, two fuzzy-spelling interview rounds |',
   ].join('\r\n');
 
   const interviewRows = parseActiveInterviews(activeMd.replace(/\r\n/g, '\n'));
@@ -433,6 +451,20 @@ function runSelfTest() {
   check(initrode && initrode.tier === 'courtesy' && initrode.trackerNums.includes(9),
     'Initrode matches "Senior Data Engineer" ↔ "Sr Data Engineer" via roleFuzzyMatch');
 
+  // Stable-id aggregation: TWO interview rows spelling the same role
+  // differently ("Senior Data Engineer" round 1, "Sr Data Engineer" round 2)
+  // both resolve to the SAME tracker application (#11) and must collapse
+  // into exactly ONE flag — not two — with the LATEST interview date kept.
+  const massiveFlags = result.flags.filter(f => f.company === 'Massive Dynamic');
+  check(massiveFlags.length === 1,
+    'fuzzy-spelling variant interview rows for the same tracker application aggregate into exactly one flag');
+  if (massiveFlags.length === 1) {
+    check(massiveFlags[0].lastInterviewDate === '2026-06-01',
+      'aggregate keeps the LATEST interview date among the fuzzy-spelling variant rows (round 2, not round 1)');
+    check(massiveFlags[0].trackerNums.includes(11),
+      'aggregate resolves to the stable tracker row number (#11), not role text');
+  }
+
   // Role mismatch, but the interview was only 2 days ago — well under the
   // courtesy threshold. The role-mismatch warning must stay silent here:
   // it carries no latency signal, so surfacing it would just be noise.
@@ -447,8 +479,8 @@ function runSelfTest() {
     'Hooli (7 days elapsed) is under the courtesy threshold — not flagged');
   check(result.warnings.some(w => w.includes('Umbrella LLC')),
     'row with unparseable date produces a warning, not a crash');
-  check(result.companiesChecked === 9,
-    'all 9 companies with at least one dated interview row were considered (Umbrella LLC has none)');
+  check(result.companiesChecked === 10,
+    'all 10 companies with at least one dated interview row were considered (Umbrella LLC has none)');
 
   // Day math is calendar-date based: a `today` that carries a time-of-day
   // (like a real `new Date()`) must not tip the count a day early.
@@ -468,7 +500,7 @@ function runSelfTest() {
     'lowering courtesy days flags fresher silences (Hooli at 7 days > 5)');
 
   // -- CRLF tracker content parses (Windows bug class) --
-  check(trackerByCompany.size === 8, 'CRLF tracker content parses (8 companies still in Interview)');
+  check(trackerByCompany.size === 9, 'CRLF tracker content parses (9 companies still in Interview)');
   check(!trackerByCompany.has(companyKey('Initech')), 'Rejected tracker rows are excluded');
 
   // -- Company key normalization --
