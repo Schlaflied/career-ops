@@ -13378,9 +13378,10 @@ try {
 
 // ── REJECTION LATENCY (#2013) ───────────────────────────────────
 // rejection-latency.mjs's own --self-test (invoked above via the CLI-check
-// table) covers latency math, tier assignment, jurisdiction resolution, and
-// the suggestion-row format. This section pins the mode-doc wiring and the
-// suggestion-only guarantees.
+// table) covers latency math, role-aware matching, and the suggestion-row
+// format. This section pins the mode-doc wiring and the suggestion-only
+// guarantees. (The signal ships a single courtesy-days threshold; a
+// jurisdiction-backed statutory tier was removed — see PR #2014 review.)
 
 console.log('\n71. Rejection-latency signal wired into followup mode (#2013)');
 
@@ -13406,10 +13407,10 @@ try {
     fail('followup latency reminders missing the {language.output} localization pattern');
   }
 
-  if (rejectionLatencySrc.includes("'CA-ON'") && rejectionLatencySrc.includes('45')) {
-    pass('statutory table ships the single verified CA-ON 45-day entry');
+  if (!/STATUTORY_THRESHOLDS|resolveJurisdiction|--jurisdiction/.test(rejectionLatencySrc)) {
+    pass('rejection-latency.mjs carries no statutory tier (courtesy-only, CodeRabbit PR #2014 review)');
   } else {
-    fail('rejection-latency.mjs missing the verified CA-ON statutory entry');
+    fail('rejection-latency.mjs still references the removed statutory tier / jurisdiction resolution');
   }
 
   if (rejectionLatencySrc.includes('not legal advice')) {

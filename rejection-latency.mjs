@@ -19,24 +19,14 @@
  *      The role join prevents a resolved application from borrowing an
  *      unrelated same-company application's silence, and vice versa.)
  *
- * Two tiers, never conflated:
- *   - statutory — jurisdiction-backed notification window. Ships with exactly
- *     one verified entry: CA-ON = 45 days (Ontario ESA, Working for Workers
- *     Five Act, 2024 + O. Reg. 476/24, in force 2026-01-01: employers with
- *     25+ employees must inform interviewed candidates for publicly
- *     advertised postings whether a hiring decision has been made within 45
- *     days of the last interview). The statutory tier only considers rounds
- *     that plausibly count as interviews under the rule: preliminary
- *     screening rounds (Round cell matching /screen/i) are excluded, and the
- *     qualifying interview must be on or after the rule's in-force date
- *     (2026-01-01) — earlier or screening-only silences degrade to the
- *     courtesy tier. Output phrases this as a fact about elapsed time
- *     ("exceeds the ... notification window"), NEVER as a legal conclusion —
- *     employer size and posting type are not verifiable from tracker data.
- *     Not legal advice.
- *   - courtesy — soft 30-day default with no legal claim attached,
- *     configurable via config/profile.yml `rejection_latency.courtesy_days`
- *     or `--courtesy-days`.
+ * Single courtesy tier: a soft 30-day default with no legal claim attached,
+ * configurable via config/profile.yml `rejection_latency.courtesy_days` or
+ * `--courtesy-days`. (An earlier revision of this script also shipped a
+ * jurisdiction-backed statutory tier; it was removed because the underlying
+ * legal threshold could change and the script has no way to re-verify it —
+ * see PR #2014 review discussion. The courtesy tier, role-aware interview
+ * matching, screening-round handling, blacklist suggestions, and read-only
+ * guarantees are unaffected.)
  *
  * Each flag carries a ready-to-copy data/blacklist.md row (same
  * suggestion-only bridge as modes/interview-redflag.md, #1854/#1856). This
@@ -44,15 +34,9 @@
  * data/active-interviews.md — it reads and reports, the user acts (#1742
  * opt-in guarantee).
  *
- * Jurisdiction is resolved from config/profile.yml `location.country` +
- * `location.province`/`region`/`state` (the region-aware pattern of the
- * employee-vs-contractor signal, #1630/#1631), overridable via
- * `rejection_latency.jurisdiction: CA-ON` or `--jurisdiction CA-ON`.
- *
  * Run: node rejection-latency.mjs             (JSON to stdout)
  *      node rejection-latency.mjs --summary   (human-readable table)
  *      node rejection-latency.mjs --courtesy-days 21
- *      node rejection-latency.mjs --jurisdiction CA-ON
  *      node rejection-latency.mjs --today 2026-07-17         (deterministic runs/tests)
  *      node rejection-latency.mjs --file path/to/active-interviews.md
  *      node rejection-latency.mjs --tracker path/to/applications.md
@@ -81,45 +65,29 @@ const PROFILE_FILE = process.env.CAREER_OPS_PROFILE || join(CAREER_OPS, 'config/
 
 export const DEFAULT_COURTESY_DAYS = 30;
 
-// Statutory tier: jurisdiction → verified notification window. Exactly one
-// verified entry ships; other jurisdictions are community-contributed WITH
-// sources (same spirit as the localized market modes). Never add an entry
-// without a citable statute/regulation.
-export const STATUTORY_THRESHOLDS = {
-  'CA-ON': {
-    days: 45,
-    window: 'Ontario ESA 45-day notification window',
-    // The rule applies to interviews on/after its in-force date, and
-    // preliminary screenings are expressly excluded — both enforced in
-    // computeRejectionLatency before this tier can be assigned.
-    effectiveFrom: '2026-01-01',
-    basis:
-      'Ontario ESA — Working for Workers Five Act, 2024 + O. Reg. 476/24 ' +
-      '(in force 2026-01-01): employers with 25+ employees must inform interviewed ' +
-      'candidates for publicly advertised postings whether a hiring decision has ' +
-      'been made within 45 days of the last interview. Preliminary screening ' +
-      'does not count as an interview under the rule.',
-  },
-};
-
 export const DISCLAIMER =
-  'Elapsed-time observation only — not legal advice. Whether a statutory ' +
-  'notification rule applies to a specific employer depends on facts the ' +
-  'tracker cannot verify (e.g. employer size, whether the posting was ' +
-  'publicly advertised).';
+  'Elapsed-time observation only — not legal advice or a claim that the ' +
+  'employer did anything wrong.';
 
 // --- CLI args ---
 const args = process.argv.slice(2);
 const summaryMode = args.includes('--summary');
 const selfTestMode = args.includes('--self-test');
+// A flag's value must be present and must not itself look like another flag
+// (e.g. `--today --summary` must not silently set cliToday to '--summary').
 const argValue = (flag) => {
   const idx = args.indexOf(flag);
-  return idx !== -1 && args[idx + 1] !== undefined ? args[idx + 1] : null;
+  if (idx === -1) return null;
+  const next = args[idx + 1];
+  if (next === undefined || next.startsWith('--')) {
+    console.error(`${flag} requires a value.`);
+    process.exit(2);
+  }
+  return next;
 };
 const ACTIVE_INTERVIEWS_PATH = argValue('--file') || DEFAULT_ACTIVE_INTERVIEWS_PATH;
 const TRACKER_PATH = argValue('--tracker') || DEFAULT_TRACKER_PATH;
 const cliCourtesyDays = argValue('--courtesy-days');
-const cliJurisdiction = argValue('--jurisdiction');
 const cliToday = argValue('--today');
 
 // --- Date helpers (same conventions as detect-reposts.mjs) ---
@@ -169,30 +137,6 @@ function findColumn(row, name) {
 }
 
 // --- Profile / jurisdiction resolution ---
-const COUNTRY_CODES = {
-  ca: 'CA', canada: 'CA',
-  us: 'US', usa: 'US', 'united states': 'US', 'united states of america': 'US',
-};
-
-// Canadian provinces/territories — only CA-ON has a statutory entry today,
-// but resolving all of them keeps "no statutory rule for your region yet"
-// distinguishable from "region not understood".
-const CA_REGION_CODES = {
-  on: 'ON', ontario: 'ON',
-  qc: 'QC', quebec: 'QC', 'québec': 'QC',
-  bc: 'BC', 'british columbia': 'BC',
-  ab: 'AB', alberta: 'AB',
-  mb: 'MB', manitoba: 'MB',
-  sk: 'SK', saskatchewan: 'SK',
-  ns: 'NS', 'nova scotia': 'NS',
-  nb: 'NB', 'new brunswick': 'NB',
-  nl: 'NL', 'newfoundland and labrador': 'NL',
-  pe: 'PE', 'prince edward island': 'PE',
-  yt: 'YT', yukon: 'YT',
-  nt: 'NT', 'northwest territories': 'NT',
-  nu: 'NU', nunavut: 'NU',
-};
-
 export function loadProfile(profilePath = PROFILE_FILE) {
   if (!profilePath || !existsSync(profilePath)) return {};
   try {
@@ -200,46 +144,6 @@ export function loadProfile(profilePath = PROFILE_FILE) {
   } catch {
     return {};
   }
-}
-
-/**
- * Resolve a jurisdiction code like "CA-ON" from the profile.
- * Precedence: explicit `rejection_latency.jurisdiction` > `location.country`
- * + `location.province`/`region`/`state` > region suffix in
- * `identity.location` (e.g. "Toronto, ON"). Returns null when no
- * jurisdiction can be resolved — the statutory tier simply stays inactive.
- */
-export function resolveJurisdiction(profile) {
-  if (!profile || typeof profile !== 'object') return null;
-
-  const explicit = profile.rejection_latency?.jurisdiction;
-  if (typeof explicit === 'string' && /^[A-Za-z]{2}-[A-Za-z]{2,3}$/.test(explicit.trim())) {
-    return explicit.trim().toUpperCase();
-  }
-
-  const loc = profile.location || {};
-  const country = COUNTRY_CODES[String(loc.country || '').trim().toLowerCase()] || null;
-  if (!country) return null;
-
-  const rawRegion = String(loc.province ?? loc.region ?? loc.state ?? '').trim().toLowerCase();
-  let region = null;
-  if (rawRegion) {
-    region = country === 'CA'
-      ? (CA_REGION_CODES[rawRegion] || null)
-      : (/^[a-z]{2}$/.test(rawRegion) ? rawRegion.toUpperCase() : null);
-  }
-
-  // Fallback: "City, XX" suffix in identity.location.
-  if (!region) {
-    const identityLoc = String(profile.identity?.location || '').trim();
-    const suffix = identityLoc.match(/,\s*([A-Za-z]{2})\s*$/);
-    if (suffix) {
-      const code = suffix[1].toLowerCase();
-      region = country === 'CA' ? (CA_REGION_CODES[code] || null) : code.toUpperCase();
-    }
-  }
-
-  return region ? `${country}-${region}` : null;
 }
 
 // --- Tracker parsing ---
@@ -271,20 +175,13 @@ export function buildBlacklistSuggestion(company, todayStr, reason) {
   return `| ${company} | ${todayStr} | company | ${reason} |`;
 }
 
-// Rounds that read as preliminary screenings ("Prescreen", "Pre-screen",
-// "Phone Screen", "Screening call", …). Excluded from the STATUTORY tier only
-// — Ontario's rule expressly excludes preliminary screenings from counting as
-// an interview. The courtesy tier still considers them: 30+ days of silence
-// after a screen is a fair courtesy signal even without a legal anchor.
-const SCREENING_ROUND_RE = /screen/i;
-
 /**
  * Core check. Pure — no I/O, no clock reads (today is injected).
  *
  * @param {object[]} interviewRows - parsed data/active-interviews.md rows
  *   (parseActiveInterviews output: objects keyed by header cells).
  * @param {Map<string, object[]>} trackerByCompany - parseTrackerInterviewRows output.
- * @param {object} opts - { today: Date, courtesyDays: number, jurisdiction: string|null }
+ * @param {object} opts - { today: Date, courtesyDays: number }
  * @returns {{ flags: object[], warnings: string[], companiesChecked: number }}
  */
 export function computeRejectionLatency(interviewRows, trackerByCompany, opts = {}) {
@@ -294,9 +191,6 @@ export function computeRejectionLatency(interviewRows, trackerByCompany, opts = 
   const courtesyDays = Number.isFinite(opts.courtesyDays) && opts.courtesyDays > 0
     ? opts.courtesyDays
     : DEFAULT_COURTESY_DAYS;
-  const jurisdiction = opts.jurisdiction || null;
-  const statutory = jurisdiction ? STATUTORY_THRESHOLDS[jurisdiction] || null : null;
-  const statutoryFrom = statutory && statutory.effectiveFrom ? parseDate(statutory.effectiveFrom) : null;
 
   const warnings = [];
   const rows = Array.isArray(interviewRows) ? interviewRows : [];
@@ -305,8 +199,6 @@ export function computeRejectionLatency(interviewRows, trackerByCompany, opts = 
   // Latest interview date per APPLICATION — keyed by (company, role), both
   // case/punctuation-insensitive — so a resolved application never borrows
   // an unrelated same-company application's interview date (or vice versa).
-  // Tracked separately: lastDate (any round, feeds the courtesy tier) and
-  // lastEligibleDate (non-screening rounds only, feeds the statutory tier).
   const byApplication = new Map();
   const companiesSeen = new Set();
   for (const row of rows) {
@@ -325,16 +217,12 @@ export function computeRejectionLatency(interviewRows, trackerByCompany, opts = 
     companiesSeen.add(cKey);
 
     const role = findColumn(row, 'role').trim();
-    const round = findColumn(row, 'round').trim();
     const appKey = `${cKey}::${companyKey(role)}`;
     if (!byApplication.has(appKey)) {
-      byApplication.set(appKey, { company, role, lastDate: null, lastEligibleDate: null });
+      byApplication.set(appKey, { company, role, lastDate: null });
     }
     const entry = byApplication.get(appKey);
     if (!entry.lastDate || date > entry.lastDate) entry.lastDate = date;
-    if (!SCREENING_ROUND_RE.test(round) && (!entry.lastEligibleDate || date > entry.lastEligibleDate)) {
-      entry.lastEligibleDate = date;
-    }
   }
 
   const todayStr = isoDay(today);
@@ -350,6 +238,13 @@ export function computeRejectionLatency(interviewRows, trackerByCompany, opts = 
       continue;
     }
 
+    // Elapsed days first — the role-mismatch warning below is only worth
+    // surfacing when the silence would actually clear the courtesy
+    // threshold; a role mismatch on a 3-day-old interview carries no
+    // latency signal and would just be noise.
+    const daysAll = daysBetween(entry.lastDate, today);
+    if (daysAll < 0) continue; // interview is in the future
+
     // Role join: exact normalized match or role-matcher fuzzy match. An
     // interview row without a role falls back to company-level matching
     // (there is nothing to disambiguate against).
@@ -358,69 +253,35 @@ export function computeRejectionLatency(interviewRows, trackerByCompany, opts = 
       ? companyRows.filter(r => companyKey(r.role) === roleKey || roleFuzzyMatch(entry.role, r.role))
       : companyRows;
     if (trackerRows.length === 0) {
-      warnings.push(`"${entry.company}" has tracker row(s) still in Interview state, but none match the interviewed role "${entry.role}" — skipped (check role naming between data/active-interviews.md and data/applications.md).`);
+      if (daysAll > courtesyDays) {
+        warnings.push(`"${entry.company}" has tracker row(s) still in Interview state, but none match the interviewed role "${entry.role}" — skipped (check role naming between data/active-interviews.md and data/applications.md).`);
+      }
       continue;
     }
 
-    const daysAll = daysBetween(entry.lastDate, today);
-    if (daysAll < 0) continue; // interview is in the future
+    if (daysAll <= courtesyDays) continue;
 
-    // Statutory eligibility: a non-screening round on/after the rule's
-    // in-force date. Ineligible silences degrade to the courtesy tier.
-    const eligibleDate = entry.lastEligibleDate
-      && (!statutoryFrom || entry.lastEligibleDate >= statutoryFrom)
-      ? entry.lastEligibleDate
-      : null;
-    const daysEligible = eligibleDate ? daysBetween(eligibleDate, today) : null;
-
-    let tier = null;
-    let thresholdDays = null;
-    let reason = null;
-    let reasonCode = null;
-    let statutoryBasis = null;
-    let flagDate = entry.lastDate;
-    let flagDays = daysAll;
-
-    if (statutory && daysEligible !== null && daysEligible >= 0 && daysEligible > statutory.days) {
-      tier = 'statutory';
-      thresholdDays = statutory.days;
-      // A fact about elapsed time — never a claim that the employer broke
-      // the law (employer size / posting type are unverifiable here).
-      reason = `${daysEligible} days post-interview silence exceeds the ${statutory.window}`;
-      reasonCode = 'statutory-window-exceeded';
-      statutoryBasis = statutory.basis;
-      flagDate = eligibleDate;
-      flagDays = daysEligible;
-    } else if (daysAll > courtesyDays) {
-      tier = 'courtesy';
-      thresholdDays = courtesyDays;
-      reason = `${daysAll} days post-interview silence exceeds the ${courtesyDays}-day courtesy threshold`;
-      reasonCode = 'courtesy-threshold-exceeded';
-    }
-
-    if (!tier) continue;
+    const reason = `${daysAll} days post-interview silence exceeds the ${courtesyDays}-day courtesy threshold`;
 
     flags.push({
       company: entry.company,
       role: entry.role,
       trackerNums: trackerRows.map(r => r.num),
-      lastInterviewDate: isoDay(flagDate),
-      daysSinceLastInterview: flagDays,
-      tier,
-      thresholdDays,
+      lastInterviewDate: isoDay(entry.lastDate),
+      daysSinceLastInterview: daysAll,
+      tier: 'courtesy',
+      thresholdDays: courtesyDays,
       courtesyDays,
-      statutoryBasis,
       reason,
       // Language-neutral machine code — agents rendering reminders in a
       // non-English `language.output` compose prose from this + the
       // structured fields instead of relaying the English `reason` string.
-      reasonCode,
+      reasonCode: 'courtesy-threshold-exceeded',
       blacklistSuggestion: buildBlacklistSuggestion(entry.company, todayStr, reason),
     });
   }
 
   flags.sort((a, b) => {
-    if (a.tier !== b.tier) return a.tier === 'statutory' ? -1 : 1;
     if (b.daysSinceLastInterview !== a.daysSinceLastInterview) {
       return b.daysSinceLastInterview - a.daysSinceLastInterview;
     }
@@ -440,8 +301,7 @@ function readNormalized(path) {
 function printSummary(result, meta) {
   console.log(`\n${'='.repeat(78)}`);
   console.log('  Rejection Latency — career-ops');
-  console.log(`  as of: ${meta.today} | jurisdiction: ${meta.jurisdiction || 'none resolved'} | ` +
-    `statutory: ${meta.statutoryDays != null ? `${meta.statutoryDays}d` : 'n/a'} | courtesy: ${meta.courtesyDays}d`);
+  console.log(`  as of: ${meta.today} | courtesy: ${meta.courtesyDays}d`);
   console.log(`${'='.repeat(78)}\n`);
 
   if (result.flags.length === 0) {
@@ -501,9 +361,10 @@ function runSelfTest() {
     '| Umbrella LLC | Designer | Round 1 | not scheduled yet | HM | Pending | date TBD |',
     '| Hooli | PM | Round 1 | 2026-07-10 | Panel | Done | recent, on time |',
     '| Vandelay Industries | Importer | Prescreen | 2026-04-10 | Recruiter | Done | screening only |',
-    '| Stark Labs | Researcher | Round 1 | 2025-11-01 | Panel | Done | before the ESA rule was in force |',
+    '| Stark Labs | Researcher | Round 1 | 2025-11-01 | Panel | Done | interviewed a while ago |',
     '| Wayne Corp | Analyst | Round 1 | 2026-04-01 | Panel | Done | this application was later rejected |',
     '| Initrode | Senior Data Engineer | Round 1 | 2026-05-01 | Panel | Done | tracker spells the role Sr Data Engineer |',
+    '| Soylent Corp | Analyst | Round 1 | 2026-07-15 | Panel | Done | recent interview, role mismatch expected |',
   ].join('\r\n'); // CRLF on purpose — parsing must normalize
 
   const trackerMd = [
@@ -520,137 +381,98 @@ function runSelfTest() {
     '| 7 | 2026-03-01 | Wayne Corp | Analyst | 4.0/5 | Rejected | ❌ | — | resolved application |',
     '| 8 | 2026-03-05 | Wayne Corp | Designer | 3.9/5 | Interview | ❌ | — | different application, never interviewed |',
     '| 9 | 2026-04-01 | Initrode | Sr Data Engineer | 4.3/5 | Interview | ❌ | — | role spelled differently |',
+    '| 10 | 2026-06-01 | Soylent Corp | Coordinator | 3.7/5 | Interview | ❌ | — | different role from the interview |',
   ].join('\r\n');
 
   const interviewRows = parseActiveInterviews(activeMd.replace(/\r\n/g, '\n'));
   const trackerByCompany = parseTrackerInterviewRows(trackerMd);
   const today = parseDate('2026-07-17');
 
-  // -- CA-ON: statutory tier active --
-  const on = computeRejectionLatency(interviewRows, trackerByCompany, {
-    today, courtesyDays: 30, jurisdiction: 'CA-ON',
+  const result = computeRejectionLatency(interviewRows, trackerByCompany, {
+    today, courtesyDays: 30,
   });
 
-  const acme = on.flags.find(f => f.company === 'Acme Corp');
-  check(!!acme, 'Acme Corp (77 days, still Interview) is flagged under CA-ON');
+  const acme = result.flags.find(f => f.company === 'Acme Corp');
+  check(!!acme, 'Acme Corp (77 days, still Interview) is flagged');
   if (acme) {
-    check(acme.tier === 'statutory', 'Acme Corp flag is statutory tier (77 > 45)');
+    check(acme.tier === 'courtesy', 'Acme Corp flag is the courtesy tier');
     check(acme.lastInterviewDate === '2026-05-01', 'latest interview date wins (2026-05-01, not 2026-04-01)');
     check(acme.daysSinceLastInterview === 77, 'elapsed days computed from last interview to --today');
-    check(acme.reason.includes('exceeds the Ontario ESA 45-day notification window'),
-      'statutory phrasing is a fact about elapsed time (notification window)');
-    check(!/broke the law|illegal|violat/i.test(acme.reason + (acme.statutoryBasis || '')),
-      'statutory output never claims a legal violation');
-    check(acme.statutoryBasis && acme.statutoryBasis.includes('O. Reg. 476/24'),
-      'statutory basis cites the regulation');
-    check(acme.statutoryBasis.includes('Working for Workers Five Act, 2024'),
-      'statutory basis attributes the rule to the Five Act specifically');
-    check(acme.reasonCode === 'statutory-window-exceeded',
-      'statutory flag carries the language-neutral reasonCode');
+    check(acme.reason.includes('30-day courtesy threshold'), 'reason names the courtesy threshold');
+    check(acme.reasonCode === 'courtesy-threshold-exceeded', 'flag carries the language-neutral reasonCode');
     check(acme.blacklistSuggestion === '| Acme Corp | 2026-07-17 | company | ' + acme.reason + ' |',
       'blacklist suggestion row matches data/blacklist.md column format');
     check(acme.trackerNums.includes(1), 'flag carries the tracker row number(s)');
   }
 
-  const globex = on.flags.find(f => f.company === 'Globex');
-  check(!!globex, 'Globex (37 days, still Interview) is flagged under CA-ON');
+  const globex = result.flags.find(f => f.company === 'Globex');
+  check(!!globex, 'Globex (37 days, still Interview) is flagged');
   if (globex) {
-    check(globex.tier === 'courtesy', 'Globex is courtesy tier (prescreen round — statutory-ineligible — and 37 > 30)');
-    check(globex.statutoryBasis === null, 'courtesy tier carries no statutory basis');
+    check(globex.tier === 'courtesy', 'Globex is courtesy tier (37 > 30)');
     check(globex.reason.includes('30-day courtesy threshold'), 'courtesy reason names the courtesy threshold');
-    check(globex.reasonCode === 'courtesy-threshold-exceeded', 'courtesy flag carries the language-neutral reasonCode');
   }
 
-  // Statutory eligibility: screening-only interviews never reach the
-  // statutory tier, however long the silence (Ontario's rule excludes
-  // preliminary screenings) — they degrade to courtesy.
-  const vandelay = on.flags.find(f => f.company === 'Vandelay Industries');
-  check(vandelay && vandelay.tier === 'courtesy',
-    'Vandelay Industries (98 days, but prescreen-only) degrades to courtesy — never statutory');
+  const vandelay = result.flags.find(f => f.company === 'Vandelay Industries');
+  check(vandelay && vandelay.tier === 'courtesy', 'Vandelay Industries (98 days) is flagged courtesy tier');
 
-  // Statutory eligibility: interviews before the rule's in-force date
-  // (2026-01-01) never reach the statutory tier either.
-  const stark = on.flags.find(f => f.company === 'Stark Labs');
-  check(stark && stark.tier === 'courtesy',
-    'Stark Labs (interviewed 2025-11-01, pre-ESA-rule) degrades to courtesy — never statutory');
+  const stark = result.flags.find(f => f.company === 'Stark Labs');
+  check(stark && stark.tier === 'courtesy', 'Stark Labs (interviewed 2025-11-01) is flagged courtesy tier');
 
   // Role-aware join: Wayne Corp's interviewed application (Analyst) is
   // Rejected in the tracker; the still-Interview row is a DIFFERENT
-  // application (Designer, never interviewed). No flag, explicit warning.
-  check(!on.flags.some(f => f.company === 'Wayne Corp'),
+  // application (Designer, never interviewed). No flag, explicit warning
+  // (the silence is well past the courtesy threshold, so the warning is
+  // threshold-relevant).
+  check(!result.flags.some(f => f.company === 'Wayne Corp'),
     'Wayne Corp is not flagged — the interviewed role is resolved, the Interview-state row is a different role');
-  check(on.warnings.some(w => w.includes('Wayne Corp') && w.includes('Analyst')),
-    'role mismatch at Wayne Corp produces an explicit warning instead of a silent (or wrong) flag');
+  check(result.warnings.some(w => w.includes('Wayne Corp') && w.includes('Analyst')),
+    'role mismatch at Wayne Corp (107 days, past threshold) produces an explicit warning');
 
   // Role-aware join: fuzzy title variants still match (role-matcher.mjs).
-  const initrode = on.flags.find(f => f.company === 'Initrode');
-  check(initrode && initrode.tier === 'statutory' && initrode.trackerNums.includes(9),
-    'Initrode matches "Senior Data Engineer" ↔ "Sr Data Engineer" via roleFuzzyMatch and flags statutory');
+  const initrode = result.flags.find(f => f.company === 'Initrode');
+  check(initrode && initrode.tier === 'courtesy' && initrode.trackerNums.includes(9),
+    'Initrode matches "Senior Data Engineer" ↔ "Sr Data Engineer" via roleFuzzyMatch');
 
-  check(!on.flags.some(f => f.company === 'Initech'),
+  // Role mismatch, but the interview was only 2 days ago — well under the
+  // courtesy threshold. The role-mismatch warning must stay silent here:
+  // it carries no latency signal, so surfacing it would just be noise.
+  check(!result.flags.some(f => f.company === 'Soylent Corp'),
+    'Soylent Corp (2 days elapsed, role mismatch) is not flagged — under the courtesy threshold');
+  check(!result.warnings.some(w => w.includes('Soylent Corp')),
+    'role mismatch at Soylent Corp produces NO warning — the silence is not threshold-relevant');
+
+  check(!result.flags.some(f => f.company === 'Initech'),
     'Initech (Rejected in tracker — response recorded) is never flagged');
-  check(!on.flags.some(f => f.company === 'Hooli'),
-    'Hooli (7 days elapsed) is under both thresholds — not flagged');
-  check(on.flags[0] && on.flags[0].tier === 'statutory', 'statutory flags sort before courtesy flags');
-  check(on.warnings.some(w => w.includes('Umbrella LLC')),
+  check(!result.flags.some(f => f.company === 'Hooli'),
+    'Hooli (7 days elapsed) is under the courtesy threshold — not flagged');
+  check(result.warnings.some(w => w.includes('Umbrella LLC')),
     'row with unparseable date produces a warning, not a crash');
-  check(on.companiesChecked === 8,
-    'all 8 companies with at least one dated interview row were considered (Umbrella LLC has none)');
+  check(result.companiesChecked === 9,
+    'all 9 companies with at least one dated interview row were considered (Umbrella LLC has none)');
 
   // Day math is calendar-date based: a `today` that carries a time-of-day
   // (like a real `new Date()`) must not tip the count a day early.
   const lateToday = new Date('2026-07-17T18:30:00Z');
-  const onLate = computeRejectionLatency(interviewRows, trackerByCompany, {
-    today: lateToday, courtesyDays: 30, jurisdiction: 'CA-ON',
+  const resultLate = computeRejectionLatency(interviewRows, trackerByCompany, {
+    today: lateToday, courtesyDays: 30,
   });
-  const acmeLate = onLate.flags.find(f => f.company === 'Acme Corp');
+  const acmeLate = resultLate.flags.find(f => f.company === 'Acme Corp');
   check(acmeLate && acmeLate.daysSinceLastInterview === 77,
     'elapsed days ignore time-of-day (UTC-midnight calendar math)');
 
-  // -- No jurisdiction: statutory tier inactive, courtesy still works --
-  const nowhere = computeRejectionLatency(interviewRows, trackerByCompany, {
-    today, courtesyDays: 30, jurisdiction: null,
-  });
-  const acmeNowhere = nowhere.flags.find(f => f.company === 'Acme Corp');
-  check(acmeNowhere && acmeNowhere.tier === 'courtesy',
-    'without a jurisdiction, Acme Corp downgrades to a courtesy-tier flag');
-  check(!nowhere.flags.some(f => f.tier === 'statutory'),
-    'no statutory flags without a resolved jurisdiction');
-
-  // -- Unknown jurisdiction code: same as none (table ships CA-ON only) --
-  const elsewhere = computeRejectionLatency(interviewRows, trackerByCompany, {
-    today, courtesyDays: 30, jurisdiction: 'CA-BC',
-  });
-  check(!elsewhere.flags.some(f => f.tier === 'statutory'),
-    'jurisdiction without a statutory entry (CA-BC) produces no statutory flags');
-
   // -- Configurable courtesy threshold --
   const strict = computeRejectionLatency(interviewRows, trackerByCompany, {
-    today, courtesyDays: 5, jurisdiction: null,
+    today, courtesyDays: 5,
   });
   check(strict.flags.some(f => f.company === 'Hooli' && f.tier === 'courtesy'),
     'lowering courtesy days flags fresher silences (Hooli at 7 days > 5)');
 
   // -- CRLF tracker content parses (Windows bug class) --
-  check(trackerByCompany.size === 7, 'CRLF tracker content parses (7 companies still in Interview)');
+  check(trackerByCompany.size === 8, 'CRLF tracker content parses (8 companies still in Interview)');
   check(!trackerByCompany.has(companyKey('Initech')), 'Rejected tracker rows are excluded');
 
   // -- Company key normalization --
   check(companyKey('Acme Corp.') === companyKey('acme corp'), 'company match is case/punctuation-insensitive');
-
-  // -- Jurisdiction resolution from profile shapes --
-  check(resolveJurisdiction({ location: { country: 'Canada', province: 'Ontario' } }) === 'CA-ON',
-    'resolves CA-ON from country + province name');
-  check(resolveJurisdiction({ location: { country: 'canada', region: 'ON' } }) === 'CA-ON',
-    'resolves CA-ON from lowercase country + 2-letter region');
-  check(resolveJurisdiction({ location: { country: 'Canada' }, identity: { location: 'Toronto, ON' } }) === 'CA-ON',
-    'falls back to the identity.location ", ON" suffix');
-  check(resolveJurisdiction({ rejection_latency: { jurisdiction: 'ca-on' } }) === 'CA-ON',
-    'explicit rejection_latency.jurisdiction override wins and is normalized');
-  check(resolveJurisdiction({ location: { country: 'Canada' } }) === null,
-    'country without a region resolves to null (statutory tier stays off)');
-  check(resolveJurisdiction({}) === null, 'empty profile resolves to null');
-  check(resolveJurisdiction(null) === null, 'null profile resolves to null (no crash)');
 
   // -- Empty / malformed inputs never crash --
   check(computeRejectionLatency([], new Map(), { today }).flags.length === 0, 'empty inputs return no flags');
@@ -669,30 +491,31 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
 
   const profile = loadProfile();
-  const jurisdiction = cliJurisdiction
-    ? cliJurisdiction.trim().toUpperCase()
-    : resolveJurisdiction(profile);
   const profileCourtesy = Number.parseInt(profile.rejection_latency?.courtesy_days, 10);
   const cliCourtesy = Number.parseInt(cliCourtesyDays, 10);
   const courtesyDays = Number.isFinite(cliCourtesy) && cliCourtesy > 0
     ? cliCourtesy
     : (Number.isFinite(profileCourtesy) && profileCourtesy > 0 ? profileCourtesy : DEFAULT_COURTESY_DAYS);
-  const today = (cliToday && parseDate(cliToday)) || new Date();
+
+  let today = new Date();
+  if (cliToday) {
+    const parsed = parseDate(cliToday);
+    if (!parsed) {
+      console.error(`--today expects YYYY-MM-DD, received "${cliToday}".`);
+      process.exit(2);
+    }
+    today = parsed;
+  }
 
   const interviewRows = parseActiveInterviews(readNormalized(ACTIVE_INTERVIEWS_PATH));
   const trackerByCompany = parseTrackerInterviewRows(readNormalized(TRACKER_PATH));
 
   const result = computeRejectionLatency(interviewRows, trackerByCompany, {
-    today, courtesyDays, jurisdiction,
+    today, courtesyDays,
   });
 
-  const statutoryDays = jurisdiction && STATUTORY_THRESHOLDS[jurisdiction]
-    ? STATUTORY_THRESHOLDS[jurisdiction].days
-    : null;
   const metadata = {
     today: isoDay(today),
-    jurisdiction,
-    statutoryDays,
     courtesyDays,
     interviewRows: interviewRows.length,
     companiesChecked: result.companiesChecked,

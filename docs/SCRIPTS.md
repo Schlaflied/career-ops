@@ -458,13 +458,12 @@ node check-table-freshness.mjs --self-test
 
 ## rejection-latency
 
-Post-interview response-latency signal. Cross-references `data/active-interviews.md` (latest interview date per application — company + role, fuzzy role match via `role-matcher.mjs`) with `data/applications.md` (rows still in `Interview` state — i.e. no `Responded`/`Offer`/`Rejected` transition recorded since) and flags applications whose silence exceeds a threshold. Two tiers, never conflated: **statutory** — jurisdiction-backed notification window, seeded with exactly one verified entry (`CA-ON: 45` days — Ontario ESA, Working for Workers Five Act, 2024 + O. Reg. 476/24, in force 2026-01-01; only non-screening rounds on/after 2026-01-01 qualify — preliminary screenings and earlier interviews degrade to the courtesy tier; phrased strictly as "exceeds the Ontario ESA 45-day notification window", a fact about elapsed time, never a legal conclusion — employer size and posting type are unverifiable from tracker data; not legal advice); **courtesy** — soft 30-day default with no legal claim attached. Jurisdiction resolves from `config/profile.yml` `location.country` + `location.province`/`region`/`state` (override: `rejection_latency.jurisdiction` or `--jurisdiction`); courtesy days from `rejection_latency.courtesy_days` or `--courtesy-days`. Each flag carries a ready-to-copy `data/blacklist.md` row (same suggestion-only bridge as `modes/interview-redflag.md`, #1854/#1856) — the script never writes to `data/blacklist.md`, `data/applications.md`, or `data/active-interviews.md` (#1742 opt-in guarantee). Surfaced by the `followup` mode.
+Post-interview response-latency signal. Cross-references `data/active-interviews.md` (latest interview date per application — company + role, fuzzy role match via `role-matcher.mjs`) with `data/applications.md` (rows still in `Interview` state — i.e. no `Responded`/`Offer`/`Rejected` transition recorded since) and flags applications whose silence exceeds a soft **courtesy** threshold (30-day default, no legal claim attached) from `rejection_latency.courtesy_days` or `--courtesy-days`. (An earlier revision also shipped a jurisdiction-backed statutory tier; it was removed — the underlying legal threshold could change and the script has no way to re-verify it.) Each flag carries a ready-to-copy `data/blacklist.md` row (same suggestion-only bridge as `modes/interview-redflag.md`, #1854/#1856) — the script never writes to `data/blacklist.md`, `data/applications.md`, or `data/active-interviews.md` (#1742 opt-in guarantee). Surfaced by the `followup` mode.
 
 ```bash
 node rejection-latency.mjs             # JSON
 node rejection-latency.mjs --summary   # human-readable table + suggested blacklist rows
 node rejection-latency.mjs --courtesy-days 21
-node rejection-latency.mjs --jurisdiction CA-ON
 node rejection-latency.mjs --today 2026-07-17   # deterministic runs/tests
 node rejection-latency.mjs --self-test
 ```
