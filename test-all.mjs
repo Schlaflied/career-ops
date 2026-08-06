@@ -2440,19 +2440,22 @@ if (
       const { load } = await import('js-yaml');
       const pt = load(readFileSync(ptPath, 'utf-8'));
       const on = pt?.jurisdictions?.['CA-ON'];
+      const isNonEmptyStringArray = (v) => Array.isArray(v) && v.length > 0 && v.every((s) => typeof s === 'string' && s.length > 0);
+      const effectiveStr = on?.effective instanceof Date ? on.effective.toISOString().slice(0, 10) : on?.effective;
       if (
         on &&
         on.range_required === true &&
         on.width_cap?.amount === 50000 &&
         on.width_cap?.currency === 'CAD' &&
-        Array.isArray(on.exemptions) && on.exemptions.length > 0 &&
+        on.width_cap?.period === 'year' &&
+        isNonEmptyStringArray(on.exemptions) &&
         typeof on.legal_basis === 'string' && on.legal_basis.includes('476/24') &&
-        Boolean(on.effective) &&
-        Array.isArray(on.sources) && on.sources.length > 0
+        effectiveStr === '2026-01-01' &&
+        isNonEmptyStringArray(on.sources)
       ) {
-        pass('pay-transparency.yml parses and CA-ON seed carries width_cap/exemptions/legal_basis/effective/sources (#2019)');
+        pass('pay-transparency.yml parses and CA-ON seed carries width_cap (incl. year period)/exemptions/legal_basis/effective 2026-01-01/sources (#2019)');
       } else {
-        fail('pay-transparency.yml CA-ON seed incomplete — needs range_required, width_cap 50000 CAD, exemptions, legal_basis (O. Reg. 476/24), effective date, sources (#2019)');
+        fail('pay-transparency.yml CA-ON seed incomplete — needs range_required, width_cap 50000 CAD/year, non-empty string-array exemptions, legal_basis (O. Reg. 476/24), effective 2026-01-01, non-empty string-array sources (#2019)');
       }
     } catch (e) {
       fail(`templates/pay-transparency.yml does not parse as YAML: ${e.message} (#2019)`);
@@ -2473,7 +2476,7 @@ if (
   ) {
     pass('oferta Block G has pay-transparency dual sub-signals: strong range-width + corroborating-only missing-range (#2019)');
   } else {
-    fail('oferta Block G missing/incomplete pay-transparency section — needs table reference, 9a strong + 9b corroborating-only sub-signals, never-standalone constraint, phrasing discipline, not-legal-advice note (#2019)');
+    fail('oferta Block G missing/incomplete pay-transparency section — needs table reference, 13a strong + 13b corroborating-only sub-signals, never-standalone constraint, phrasing discipline, not-legal-advice note (#2019)');
   }
 
   // 3. Phrasing discipline holds in the report-facing text: the blockquote

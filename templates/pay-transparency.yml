@@ -28,6 +28,12 @@
 #   legal_basis: string      — statute/regulation citation
 #   effective: YYYY-MM-DD    — date the requirement is in force
 #   sources: list            — citable bulletins/analyses backing the row
+#   as_of: YYYY-MM-DD        — date this row was last verified against sources
+#                              (checked by check-table-freshness.mjs, which
+#                              discovers mapping-shaped row-sets like
+#                              `jurisdictions:` here the same way it discovers
+#                              array-shaped ones — any row carrying `as_of`
+#                              qualifies its container as a jurisdiction table)
 #
 # CANDIDATE ROWS FOR CONTRIBUTORS (suggestions only — do NOT add without the
 # source + effective-date discipline above):
@@ -57,3 +63,4 @@ jurisdictions:
       - "Littler — Ontario Working for Workers Acts job-posting analysis"
       - "Hicks Morley — ESA job posting amendments FTR Now bulletin"
       - "Hyde HR Law — Ontario pay transparency update"
+    as_of: "2026-07-18"
