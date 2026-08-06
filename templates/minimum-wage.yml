@@ -1,9 +1,25 @@
-# Career-Ops — Statutory Minimum-Wage Floors (jurisdiction table) (#2025)
+# Career-Ops — Minimum-Wage Reference Data (jurisdiction table) (#2025)
 #
 # Consumed prompt-level by modes/oferta.md Block G ("Minimum-Wage Floor
 # Check"). This file is a DATA REFERENCE, not instruction logic: extending it
 # to a new jurisdiction never requires touching the rule text in
-# modes/oferta.md. No script reads it — the agent does.
+# modes/oferta.md. No PRODUCTION script reads it — nothing in the runtime
+# pipeline (scan.mjs, apply flows, tracker writes, etc.) parses this file.
+# The agent consumes it as prompt-level reference text, and test-all.mjs
+# DOES validate its structure and header contract as part of the test suite
+# — "no script reads it" describes the runtime pipeline only, not CI.
+#
+# NON-AUTHORITATIVE (mandatory framing — read before editing or citing this
+# file): the rates below are NOT a verified, current, legally authoritative
+# statement of any jurisdiction's minimum wage. They are public reference
+# figures compiled from the sources cited per row — useful for comparison
+# arithmetic and for flagging that an advertised figure looks unusually low
+# relative to public data, and NOTHING MORE. They are never, on their own,
+# sufficient to assert what the CURRENT legal minimum wage is, or that any
+# employer is or isn't complying with it. Every comparison rendered from
+# this table in modes/oferta.md must route the candidate to "[ask your
+# lawyer]" or an official government source to confirm the actual current
+# statutory rate — this table supports that question, it never replaces it.
 #
 # CONTRIBUTION RULE (mandatory): no entry lands in this table without
 #   1. a citable legal source (statute, regulation, official government
@@ -15,23 +31,31 @@
 # jurisdiction tables introduced for #2013/#2018/#2019.
 #
 # STALENESS RULE (mandatory — mirrored in modes/oferta.md): minimum wages
-# change annually almost everywhere. Each row carries the current rate AND
-# the officially pre-announced next rate when one exists. Date-aware
-# selection: use `general_rate` while today < `next_effective`; use
-# `next_rate` once today >= `next_effective`. If today is PAST
-# `next_effective` and the row carries no newer data beyond `next_rate`,
-# the agent must say the table entry may be stale and needs re-verification
-# rather than asserting a floor as current fact.
+# change annually almost everywhere, and as reference data (not a live feed)
+# every row can drift out of date regardless of whether a `next_rate` was
+# ever pre-announced. A uniform 12-month freshness threshold applies to
+# EVERY row, including rows with no `next_effective`: if today's date is
+# more than 12 months past `as_of`, the row is review-due — the agent must
+# treat it as tentative reference data at best, and skip the comparison
+# entirely if the row carries no verified rate covering today (no
+# `next_rate`, or `next_rate`'s own `next_effective` window has also
+# passed) rather than presenting stale reference data as current. Within a
+# row that is still fresh under this 12-month gate, date-aware selection
+# applies as usual: use `general_rate` while today < `next_effective`; use
+# `next_rate` once today >= `next_effective`.
 #
-# NOT LEGAL ADVICE: these rows describe published statutory rates so the
-# agent can state observable arithmetic about a posting's advertised
-# compensation. They are never a basis for asserting that any employer is
-# violating any law — special-rate carve-outs, exemptions, and posting
-# provenance are not verifiable from a JD.
+# NOT LEGAL ADVICE: these rows are non-authoritative reference figures so
+# the agent can state observable, caveated arithmetic about a posting's
+# advertised compensation relative to public data. They are never a basis
+# for asserting the current legal minimum wage as fact, or that any employer
+# is violating any law — special-rate carve-outs, exemptions, and posting
+# provenance are not verifiable from a JD, and the current statutory rate is
+# not verifiable from this table alone.
 #
 # Schema per entry (key = jurisdiction code, e.g. CA-ON, US-CA, DE):
 #   jurisdiction_name: string — human-readable name for report output
-#   general_rate: number      — current general minimum wage (per hour)
+#   general_rate: number      — non-authoritative reference rate for the
+#                               general minimum wage (per hour) as of `as_of`
 #   currency: ISO 4217 code
 #   effective: YYYY-MM-DD     — date general_rate came into force
 #   next_rate: number|null    — officially announced next rate, if any

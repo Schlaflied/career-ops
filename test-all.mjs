@@ -2460,49 +2460,66 @@ if (
       if (
         mwRaw.includes('CONTRIBUTION RULE') &&
         mwRaw.includes('STALENESS RULE') &&
-        mwRaw.includes('may be stale')
+        mwRaw.includes('review-due') &&
+        mwRaw.includes('12 months') &&
+        mwRaw.includes('NON-AUTHORITATIVE') &&
+        mwRaw.includes('No PRODUCTION script reads it') &&
+        mwRaw.includes('DOES validate its structure')
       ) {
-        pass('minimum-wage.yml header documents the contribution rule and the staleness rule (#2025)');
+        pass('minimum-wage.yml header documents the contribution rule, the 12-month uniform staleness rule, the non-authoritative framing, and the accurate no-production-script/test-validated consumer boundary (#2025, CodeRabbit)');
       } else {
-        fail('minimum-wage.yml header missing the contribution rule and/or staleness rule (#2025)');
+        fail('minimum-wage.yml header missing the contribution rule, 12-month staleness rule, non-authoritative framing, and/or accurate consumer-boundary wording (#2025, CodeRabbit)');
       }
     } catch (e) {
       fail(`templates/minimum-wage.yml does not parse as YAML: ${e.message} (#2025)`);
     }
   }
 
-  // 2. oferta.md carries the wage-floor section with date-aware selection,
-  //    staleness guard, conversion disclosure, carve-out honesty, and the
-  //    corroborator-not-tier-changer constraint
+  // 2. oferta.md carries the wage-floor section with jurisdiction-strict
+  //    resolution, a fixed-cash comparable-amount gate, JD-hours-first
+  //    normalization, a uniform 12-month staleness gate, carve-out honesty
+  //    requiring every eligibility condition, non-authoritative framing with
+  //    a lawyer-directed question, and the corroborator-not-tier-changer
+  //    constraint (CodeRabbit round on #2027)
   const mwStart = ofertaMode.indexOf('Minimum-Wage Floor Check');
   const mwEnd = ofertaMode.indexOf('### Output format:', Math.max(mwStart, 0));
   const mwSection = mwStart >= 0 && mwEnd > mwStart ? ofertaMode.slice(mwStart, mwEnd) : '';
   if (
     mwSection.includes('templates/minimum-wage.yml') &&
-    mwSection.includes('Date-aware rate selection (mandatory)') &&
-    mwSection.includes('Staleness guard:') &&
+    mwSection.includes('NEVER from `config/profile.yml`') &&
+    mwSection.includes('Comparable-amount gate (mandatory)') &&
+    mwSection.includes('guaranteed, fixed cash amount') &&
+    mwSection.includes('bonuses, commissions, allowances, overtime pay, 13th-month') &&
+    mwSection.includes("JD's own stated working hours") &&
     mwSection.includes('2080 hours/year') &&
-    mwSection.includes('disclose the assumption in the output') &&
+    mwSection.includes('always disclose in the output which hours figure was used') &&
+    mwSection.includes('12-month staleness gate (mandatory') &&
+    mwSection.includes('review-due') &&
     mwSection.includes('Carve-out honesty:') &&
-    mwSection.includes('STRONG, presence-based signal') &&
+    mwSection.includes('**every** eligibility condition') &&
+    mwSection.includes('carve-out is unverified') &&
+    mwSection.includes('non-authoritative') &&
+    mwSection.includes('[ask your lawyer]') &&
     mwSection.includes('never by itself changes') &&
     mwSection.includes('not legal advice')
   ) {
-    pass('oferta Block G wage-floor signal pins date-aware rates, staleness guard, 2080-hr disclosure, carve-out honesty, corroborator-only tier impact (#2025)');
+    pass('oferta Block G wage-floor signal pins jurisdiction-strict resolution (no profile fallback), fixed-cash-only comparable-amount gate, JD-hours-first normalization, uniform 12-month staleness gate, full-eligibility carve-out honesty, non-authoritative reference framing with lawyer-directed question, corroborator-only tier impact (#2025, CodeRabbit)');
   } else {
-    fail('oferta Block G missing/incomplete minimum-wage floor section — needs table reference, date-aware rate selection, staleness guard, 2080 hours/year disclosure, carve-out honesty, corroborator-not-tier-changer constraint, not-legal-advice note (#2025)');
+    fail('oferta Block G missing/incomplete minimum-wage floor section per CodeRabbit round — needs jurisdiction-strict resolution (no config/profile.yml fallback), fixed-cash comparable-amount gate excluding ranges/variable comp, JD-hours-first normalization with 2080 fallback disclosure, uniform 12-month staleness gate, full-eligibility carve-out honesty, non-authoritative framing with [ask your lawyer] routing, corroborator-not-tier-changer constraint, not-legal-advice note (#2025, CodeRabbit)');
   }
 
   // 3. Phrasing discipline holds in the report-facing text: the blockquote
-  //    templates the agent renders must state facts, never legal accusations.
+  //    templates the agent renders must state facts, never legal accusations,
+  //    and must never assert the CURRENT legal minimum as verified fact.
   //    (The rule text itself may quote the banned phrases to forbid them,
   //    so only '>' lines — the rendered output templates — are scanned.)
   const mwQuoteLines = mwSection.split('\n').filter((l) => l.trimStart().startsWith('>'));
   const mwAccusatory = mwQuoteLines.filter((l) => /illegal|violation|breaking the law/i.test(l));
-  if (mwSection && mwQuoteLines.length >= 1 && mwAccusatory.length === 0) {
-    pass('minimum-wage report template states facts only — no "illegal"/"violation"/"breaking the law" assertions (#2025)');
+  const mwHasLawyerRouting = mwQuoteLines.some((l) => l.includes('[ask your lawyer]'));
+  if (mwSection && mwQuoteLines.length >= 1 && mwAccusatory.length === 0 && mwHasLawyerRouting) {
+    pass('minimum-wage report template states facts only, routes to [ask your lawyer] — no "illegal"/"violation"/"breaking the law" assertions (#2025, CodeRabbit)');
   } else {
-    fail(`minimum-wage phrasing discipline broken: ${mwAccusatory.length ? `accusatory blockquote line(s): ${mwAccusatory[0].trim().slice(0, 80)}` : 'expected a blockquote output template in the section'} (#2025)`);
+    fail(`minimum-wage phrasing discipline broken: ${mwAccusatory.length ? `accusatory blockquote line(s): ${mwAccusatory[0].trim().slice(0, 80)}` : (!mwHasLawyerRouting ? 'missing [ask your lawyer] routing in rendered blockquote' : 'expected a blockquote output template in the section')} (#2025, CodeRabbit)`);
   }
 }
 
