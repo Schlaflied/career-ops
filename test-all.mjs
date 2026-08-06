@@ -2613,9 +2613,19 @@ if (
 }
 
 // --- offer-prep statutory-context notes for sub-statutory terms (#2039) ---
+// NOTE: per CodeRabbit review on PR #2042, the table no longer stores
+// statutory floor VALUES or doctrine NARRATIVE (case names/holdings) — only
+// two structural flags (floor_categories, void_doctrine) plus a statute
+// NAME. modes/offer-prep.md computes arithmetic on the clause's own stated
+// term and routes the actual floor figure / doctrine application to a
+// lawyer question rather than asserting either as fact. Tests below cover
+// the flag-only data shape and the lawyer-question routing workflow instead
+// of asserting specific legal figures.
 {
-  // 1. Jurisdiction-floors table exists, parses as YAML, and the CA-ON seed
-  //    is complete (floors, Waksdale void_doctrine, sources, as_of)
+  // 1. Jurisdiction-flags table exists, parses as YAML, and the CA-ON seed
+  //    carries flags only — floor_categories + void_doctrine boolean + a
+  //    statute NAME — with no floor values or doctrine narrative anywhere
+  //    in the row.
   const semPath = join(ROOT, 'templates', 'statutory-employment-minimums.yml');
   if (!existsSync(semPath)) {
     fail('templates/statutory-employment-minimums.yml missing (#2039)');
@@ -2626,38 +2636,35 @@ if (
       const sem = load(semRaw);
       const rows = Array.isArray(sem?.minimums) ? sem.minimums : [];
       const caOn = rows.find((r) => r?.jurisdiction === 'CA-ON');
-      const floors = caOn?.floors && typeof caOn.floors === 'object' ? caOn.floors : {};
+      const categories = Array.isArray(caOn?.floor_categories) ? caOn.floor_categories : [];
+      const rowText = caOn ? JSON.stringify(caOn) : '';
       if (
         caOn &&
         typeof caOn.jurisdiction_name === 'string' &&
-        ['vacation', 'notice', 'severance', 'probation_limits'].every(
-          (k) => typeof floors[k] === 'string' && floors[k].length > 0
-        ) &&
-        /2 weeks/.test(floors.vacation) && /3 weeks/.test(floors.vacation) &&
-        /8 weeks/.test(floors.notice) && /3 months/.test(floors.notice) &&
-        /26 weeks/.test(floors.severance) &&
-        typeof caOn.void_doctrine === 'string' &&
-        caOn.void_doctrine.includes('Waksdale') &&
-        caOn.void_doctrine.includes('2020 ONCA 391') &&
-        /wilful.misconduct/i.test(caOn.void_doctrine) &&
-        caOn.void_doctrine.includes('Dufault') &&
+        ['vacation', 'notice', 'severance', 'probation_limits'].every((k) => categories.includes(k)) &&
+        caOn.void_doctrine === true &&
         typeof caOn.legal_basis === 'string' && caOn.legal_basis.length > 0 &&
         Array.isArray(caOn.sources) && caOn.sources.length > 0 &&
-        typeof caOn.as_of === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(caOn.as_of)
+        typeof caOn.as_of === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(caOn.as_of) &&
+        // no floor VALUES or doctrine NARRATIVE anywhere in the row
+        !caOn.floors &&
+        !/\d+\s*(weeks?|days?|months?)/i.test(rowText) &&
+        !/Waksdale|ONCA|wilful.misconduct|Dufault/i.test(rowText)
       ) {
-        pass('statutory-employment-minimums.yml parses; CA-ON seed complete — all four ESA floors, Waksdale void_doctrine (2020 ONCA 391, wilful misconduct, Dufault), legal_basis, sources, quoted-string as_of (#2039)');
+        pass('statutory-employment-minimums.yml parses; CA-ON seed is flag-only — floor_categories (vacation/notice/severance/probation_limits), void_doctrine: true, statute-name legal_basis, sources, quoted-string as_of, and NO floor values or doctrine narrative (#2039, CodeRabbit)');
       } else {
-        fail('statutory-employment-minimums.yml CA-ON seed incomplete — needs vacation/notice/severance/probation_limits floors with the ESA figures, a Waksdale void_doctrine (2020 ONCA 391 + wilful-misconduct standard + Dufault), legal_basis, sources, quoted-string as_of (#2039)');
+        fail('statutory-employment-minimums.yml CA-ON seed does not match the flag-only shape — needs floor_categories covering all four families, void_doctrine: true, a statute-name legal_basis, sources, quoted-string as_of, and must NOT carry floor values or doctrine narrative (case names/holdings) (#2039, CodeRabbit)');
       }
       if (
         semRaw.includes('CONTRIBUTION RULE') &&
-        semRaw.includes('ABSENT-FLOOR SEMANTICS') &&
+        semRaw.includes('ABSENT-CATEGORY SEMANTICS') &&
         semRaw.includes('stays SILENT') &&
-        semRaw.includes('NOT LEGAL ADVICE')
+        semRaw.includes('NOT LEGAL ADVICE') &&
+        semRaw.includes('WHY NO FLOOR VALUES OR DOCTRINE NARRATIVE')
       ) {
-        pass('statutory-employment-minimums.yml header documents the contribution rule, absent-floor-means-silence semantics, and not-legal-advice boundary (#2039)');
+        pass('statutory-employment-minimums.yml header documents the contribution rule, absent-category-means-silence semantics, not-legal-advice boundary, and the no-values/no-narrative rationale (#2039, CodeRabbit)');
       } else {
-        fail('statutory-employment-minimums.yml header missing the contribution rule, absent-floor semantics (absent field = no floor = silence), and/or not-legal-advice note (#2039)');
+        fail('statutory-employment-minimums.yml header missing the contribution rule, absent-category semantics, not-legal-advice note, and/or the no-floor-values/no-doctrine-narrative rationale (#2039, CodeRabbit)');
       }
     } catch (e) {
       fail(`templates/statutory-employment-minimums.yml does not parse as YAML: ${e.message} (#2039)`);
@@ -2665,9 +2672,9 @@ if (
   }
 
   // 2. offer-prep carries the sub-statutory-terms subsection with both
-  //    output integrations (clause-tag note + lawyer questions), the
-  //    floors-absent silence rule, the never-assert hard rule, and the
-  //    no-calculations non-goal
+  //    output integrations (clause-tag note + lawyer questions) routing to
+  //    the lawyer rather than asserting a floor value or doctrine holding,
+  //    the floors-absent silence rule, and the never-assert hard rule.
   const semStart = offerPrepMode.indexOf('Statutory-context notes for sub-statutory terms');
   const semEnd = offerPrepMode.indexOf('## Step 3', Math.max(semStart, 0));
   const semSection = semStart >= 0 && semEnd > semStart ? offerPrepMode.slice(semStart, semEnd) : '';
@@ -2677,37 +2684,62 @@ if (
     semSection.includes('Questions for your lawyer') &&
     semSection.includes('Floors-absent silence (mandatory)') &&
     semSection.includes('no output') &&
-    semSection.includes('Never assert voidness or violation (HARD RULE)') &&
-    semSection.includes('cannot self-certify') &&
+    /Never assert a floor value, doctrine holding, voidness, or violation\s+\(HARD RULE\)/.test(semSection) &&
     semSection.includes('always a lawyer question') &&
     semSection.includes('not legal advice') &&
-    semSection.includes('not** online') &&
-    semSection.includes('Never state law from memory') &&
+    /not\*\*\s+online/.test(semSection) &&
     semSection.includes('Render in {language.output}') &&
-    semSection.includes('wilful-misconduct standard') &&
-    semSection.includes('no severance-amount calculations') &&
-    semSection.includes('Bardal')
+    semSection.includes('floor_categories') &&
+    semSection.includes('void_doctrine') &&
+    /no severance-amount calculations,\s+no floor-figure statements/.test(semSection) &&
+    semSection.includes('Bardal') &&
+    // must NOT reintroduce the removed floor value / doctrine narrative
+    !/2 weeks|3 weeks|8 weeks|26 weeks/.test(semSection) &&
+    !/Waksdale|ONCA 391|wilful.misconduct standard/i.test(semSection)
   ) {
-    pass('offer-prep sub-statutory-terms subsection pins table lookup, tag-note + lawyer-question integration, floors-absent silence, never-assert hard rule, table-backed memory-guard carve-out, no-research reaffirmation, i18n rendering, Waksdale question, Bardal no-calculations non-goal (#2039)');
+    pass('offer-prep sub-statutory-terms subsection pins flag-only table lookup, tag-note + lawyer-question routing (no asserted floor value/doctrine holding), floors-absent silence, never-assert hard rule, no-research reaffirmation, i18n rendering, Bardal no-calculations non-goal — and carries no reintroduced statutory figures or doctrine narrative (#2039, CodeRabbit)');
   } else {
-    fail('offer-prep sub-statutory-terms subsection missing/incomplete — needs table reference, statutory-context note + lawyer-question integration, floors-absent silence rule, never-assert-voidness hard rule, memory-guard carve-out, local-lookup-is-not-research clarification, {language.output} rendering, wilful-misconduct lawyer question, no-severance-calculations non-goal (#2039)');
+    fail('offer-prep sub-statutory-terms subsection missing/incomplete, or still asserts a specific floor value / doctrine holding — needs flag-only table reference, statutory-context note + lawyer-question routing, floors-absent silence rule, the floor-value/doctrine never-assert hard rule, local-lookup-is-not-research clarification, {language.output} rendering, no-severance-calculations non-goal, and must not restate the removed ESA figures or Waksdale narrative (#2039, CodeRabbit)');
   }
 
-  // 3. Phrasing discipline holds in the report-facing text: the blockquote
-  //    template may state floor facts and doctrine facts (Waksdale's
-  //    whole-provision voiding is legitimately described with "void" in the
-  //    prose), but must never assert those verdicts about the candidate's
-  //    own clause. Only '>' lines (rendered output templates) are scanned,
-  //    and only for clause-directed assertions (the #2021/#2027/#2028
-  //    scoping move).
+  // 3. Lawyer-question workflow: both the generic floor-category question
+  //    and the void_doctrine-conditioned question are present, each
+  //    explicitly asking the lawyer for the current figure/effect rather
+  //    than the mode asserting one, and each routed through
+  //    {language.output} rendering at the presentation boundary.
+  const semLawyerBlock = semSection.slice(
+    Math.max(0, semSection.indexOf('Questions for your lawyer')),
+    semSection.indexOf('candidate-empowering angle') > 0
+      ? semSection.indexOf('candidate-empowering angle')
+      : undefined
+  );
+  if (
+    /what is the current statutory minimum/i.test(semLawyerBlock) &&
+    /does this clause meet it/i.test(semLawyerBlock) &&
+    /void_doctrine: true/.test(semLawyerBlock) &&
+    /could void the whole clause/i.test(semLawyerBlock) &&
+    (semLawyerBlock.match(/Render in \{language\.output\}/g) || []).length >= 2
+  ) {
+    pass('sub-statutory-terms lawyer-question workflow generates both the generic floor-category question and the void_doctrine-conditioned question, each asking the lawyer for the current figure/effect (never asserting one) and each rendered via [Render in {language.output}] at the presentation boundary (#2039, CodeRabbit)');
+  } else {
+    fail('sub-statutory-terms lawyer-question workflow incomplete — needs a generic floor-category question asking the lawyer for the current statutory minimum, a void_doctrine-conditioned question about whether a defect could void the whole clause, and both rendered via [Render in {language.output}] (#2039, CodeRabbit)');
+  }
+
+  // 4. Phrasing discipline holds in the report-facing text: the blockquote
+  //    template may flag that a jurisdiction regulates a topic, but must
+  //    never assert a specific floor value, a doctrine holding, or a
+  //    verdict about the candidate's own clause. Only '>' lines (rendered
+  //    output templates) are scanned, and only for clause-directed
+  //    assertions (the #2021/#2027/#2028/#2039 scoping move).
   const semQuoteLines = semSection.split('\n').filter((l) => l.trimStart().startsWith('>'));
   const semAssertive = semQuoteLines.filter((l) =>
     /(this|your|the candidate'?s?) (specific )?(clause|provision|term|contract) (is|would be|will be) (void|illegal|unenforceable|invalid|below the (statutory )?floor|in violation)/i.test(l)
   );
-  if (semSection && semQuoteLines.length >= 1 && semAssertive.length === 0) {
-    pass('sub-statutory-terms statutory-context template states floor/doctrine facts only — no void/illegal/unenforceable/below-the-floor assertions about the candidate\'s clause (#2039)');
+  const semFigureLeak = semQuoteLines.filter((l) => /Waksdale|ONCA 391|\b2 weeks\b|\b8 weeks\b|\b26 weeks\b/i.test(l));
+  if (semSection && semQuoteLines.length >= 1 && semAssertive.length === 0 && semFigureLeak.length === 0) {
+    pass('sub-statutory-terms statutory-context template states clause arithmetic + regulation flags only — no void/illegal/unenforceable/below-the-floor assertions and no reintroduced statutory figures or doctrine names in the candidate\'s clause (#2039, CodeRabbit)');
   } else {
-    fail(`sub-statutory-terms phrasing discipline broken: ${semAssertive.length ? `clause-directed verdict in blockquote: ${semAssertive[0].trim().slice(0, 80)}` : 'expected a blockquote output template in the section'} (#2039)`);
+    fail(`sub-statutory-terms phrasing discipline broken: ${semAssertive.length ? `clause-directed verdict in blockquote: ${semAssertive[0].trim().slice(0, 80)}` : semFigureLeak.length ? `reintroduced statutory figure/doctrine name in blockquote: ${semFigureLeak[0].trim().slice(0, 80)}` : 'expected a blockquote output template in the section'} (#2039)`);
   }
 }
 
