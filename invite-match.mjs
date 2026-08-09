@@ -363,23 +363,26 @@ export function extractPlatform(text) {
 // (reschedules, apologies for delays, unrelated bad news) must never be
 // sufficient on its own to classify as `rejection` — see CodeRabbit review
 // on PR #2100.
+//
+// Strong-tier bar (maintainer finding, PR #2100 review comment, 2026-08-07):
+// a phrase belongs here ONLY if it cannot reasonably appear outside an
+// actual candidate rejection — e.g. "we have decided not to move forward"
+// and "pursuing other candidates" are safe because they are boilerplate ATS
+// rejection language with no other plausible use. Several phrases previously
+// listed here fail that bar and can fire on a reschedule, a delay apology,
+// or an unrelated (non-candidate-directed) bad-news announcement — those
+// have been demoted to REJECTION_PHRASES_WEAK below, where they can only
+// contribute as corroborating evidence, never trigger `rejection` alone.
 const REJECTION_PHRASES_STRONG = [
   'not been selected to advance',
-  'not been selected',
   'not selected for this position',
   'not selected for this role',
-  'will not be moving forward',
-  'not be moving forward',
   'not moving forward with your application',
-  'not successful',
-  'regret to inform',
   'decided not to move forward',
   'decided to move forward with other candidates',
   'pursue other candidates',
   'pursuing other candidates',
   'other candidates whose qualifications',
-  'will not be proceeding',
-  'unable to offer you',
   'not able to offer you a position',
 ];
 
@@ -388,8 +391,35 @@ const REJECTION_PHRASES_STRONG = [
 // benign reschedule, not a rejection). Only counts toward `rejection` when
 // it co-occurs with a strong phrase above, or with a second distinct
 // corroborating phrase — never alone. See classifyEmail() below.
+//
+// Demoted from the strong tier (maintainer finding, PR #2100 review comment,
+// 2026-08-07) because each can plausibly appear outside a rejection:
+//   - 'not been selected'          — "a candidate has not been selected yet"
+//     is delay-apology phrasing, not necessarily a rejection.
+//   - 'will not be moving forward' — generic enough to describe an
+//     unrelated project/deal, e.g. "the Q3 expansion will not be moving
+//     forward", not specific to a candidate. ('not be moving forward' is
+//     deliberately NOT also listed as a separate weak entry: it is a literal
+//     substring of 'will not be moving forward', so any text containing the
+//     latter would double-count as two "distinct" weak matches from a single
+//     utterance and defeat the two-corroborating-phrases gate below.)
+//   - 'not successful'             — extremely generic ("was not successful
+//     in reaching you", "the negotiation was not successful").
+//   - 'regret to inform'           — the classic company-wide bad-news
+//     opener (layoffs, restructuring announcements) as much as a rejection
+//     opener; not directed at the candidate by itself.
+//   - 'will not be proceeding'     — generic business phrasing (mergers,
+//     projects, purchases) with no candidate-specific anchor.
+//   - 'unable to offer you'        — also plausible mid-negotiation, e.g.
+//     "unable to offer you a higher base salary" is not a rejection.
 const REJECTION_PHRASES_WEAK = [
   'unfortunately',
+  'not been selected',
+  'will not be moving forward',
+  'not successful',
+  'regret to inform',
+  'will not be proceeding',
+  'unable to offer you',
 ];
 
 // Phrasings that suggest an interview invite. Mirrors the rejection phrase
@@ -812,7 +842,7 @@ function runSelfTest() {
   check(classifyEmail('Unfortunately, we have decided not to move forward with your application.').classification === 'rejection', 'detects "decided not to move forward" as rejection');
   check(classifyEmail('Thank you for your interest. We regret to inform you that you have not been selected to advance.').classification === 'rejection', 'detects "regret to inform" / "not been selected to advance" as rejection');
   check(classifyEmail('After careful consideration, we have decided to move forward with other candidates whose qualifications more closely align with this role.').classification === 'rejection', 'detects "move forward with other candidates" as rejection');
-  check(classifyEmail('We are sorry to inform you that you were not successful in this process.').classification === 'rejection', 'detects "not successful" as rejection');
+  check(classifyEmail('Unfortunately, we are not able to offer you a position at this time.').classification === 'rejection', 'detects "not able to offer you a position" as rejection');
   check(classifyEmail('We would like to invite you to schedule your phone screen for next week.').classification === 'invite', 'detects invite phrasing as "invite"');
   check(classifyEmail('Looking forward to interviewing with you next Tuesday.').classification === 'invite', 'detects "interviewing with" as "invite"');
   check(classifyEmail('Thanks for your recent purchase, here is your receipt.').classification === 'unknown', 'unrelated text classifies as "unknown"');
@@ -847,9 +877,41 @@ function runSelfTest() {
   check(rescheduleResult.classification !== 'rejection', 'analyzeInvite does not classify a benign reschedule email (containing only "unfortunately") as rejection — --apply would refuse this');
 
   // --- classifyEmail phraseStrength (#2100 CodeRabbit major finding follow-up) ---
-  check(classifyEmail('We regret to inform you that you have not been selected.').phraseStrength === 'strong', 'a strong rejection phrase reports phraseStrength "strong"');
+  check(classifyEmail('We are sorry to inform you that we have decided not to move forward with your application.').phraseStrength === 'strong', 'a strong rejection phrase reports phraseStrength "strong"');
   check(classifyEmail('We would like to invite you to schedule your phone screen.').phraseStrength === null, 'an invite classification reports phraseStrength null');
   check(classifyEmail('Thanks for your recent purchase.').phraseStrength === null, 'an unknown classification reports phraseStrength null');
+
+  // --- maintainer finding, PR #2100 review comment 2026-08-07: strong-tier
+  // phrases demoted to weak must never trigger `rejection` alone, only in
+  // combination with a second corroborating phrase ---
+  check(classifyEmail('We are sorry to report the negotiation was not successful.').classification !== 'rejection', '"not successful" alone (demoted phrase, unrelated context) does not classify as rejection');
+  check(classifyEmail('We regret to inform all staff that the downtown office lease will not be renewed.').classification !== 'rejection', '"regret to inform" alone (demoted phrase, non-candidate-directed context) does not classify as rejection');
+  check(classifyEmail('Please note the Q3 expansion will not be moving forward due to budget constraints.').classification !== 'rejection', '"will not be moving forward" alone (demoted phrase, unrelated project context) does not classify as rejection');
+  check(classifyEmail('We are currently unable to offer you a start date earlier than March.').classification !== 'rejection', '"unable to offer you" alone (demoted phrase, non-rejection context) does not classify as rejection');
+
+  // --- maintainer finding (PR #2100 review, 2026-08-07): realistic
+  // non-rejection emails must never classify as `rejection`, whether via a
+  // strong phrase or a `strong` phraseStrength. This is the exact false-
+  // positive class the review flagged: reschedules, delay apologies, and
+  // unrelated (non-candidate-directed) bad-news announcements that happen to
+  // share vocabulary with genuine rejection boilerplate. A false `rejection`
+  // is the unsafe direction here because `--apply` performs an irreversible
+  // tracker write gated on it (#2098) — a missed rejection only costs one
+  // unnecessary follow-up, but a false one silently kills a live process.
+  const rescheduleEmail = 'Hi Jamie,\n\nThanks for your flexibility — we need to reschedule your interview to next week. Something came up on our end and we want to make sure we can give you our full attention. Would Tuesday or Thursday afternoon work?\n\nSorry for the back and forth.\n\nBest,\nRecruiting Team';
+  const rescheduleEmailResult = classifyEmail(rescheduleEmail);
+  check(rescheduleEmailResult.classification !== 'rejection', 'realistic reschedule email does not classify as rejection');
+  check(rescheduleEmailResult.phraseStrength !== 'strong', 'realistic reschedule email does not report phraseStrength "strong"');
+
+  const delayApologyEmail = 'Hi Alex,\n\nApologies for the delay in getting back to you — we\'re still reviewing candidates for this role and expect to have an update within the next week. Thanks so much for your patience.\n\nBest,\nTalent Acquisition Team';
+  const delayApologyEmailResult = classifyEmail(delayApologyEmail);
+  check(delayApologyEmailResult.classification !== 'rejection', 'realistic delay-apology email does not classify as rejection');
+  check(delayApologyEmailResult.phraseStrength !== 'strong', 'realistic delay-apology email does not report phraseStrength "strong"');
+
+  const redundancyAnnouncementEmail = 'Hi team,\n\nWe regret to inform everyone that, following today\'s town hall, the company will be closing our satellite office as part of a broader restructuring, and several roles across departments are affected. To be clear, this update is unrelated to any individual candidate applications currently in progress — those pipelines continue as normal.\n\nThank you for your understanding.\n\nPeople Team';
+  const redundancyAnnouncementEmailResult = classifyEmail(redundancyAnnouncementEmail);
+  check(redundancyAnnouncementEmailResult.classification !== 'rejection', 'unrelated company-wide redundancy announcement does not classify as rejection');
+  check(redundancyAnnouncementEmailResult.phraseStrength !== 'strong', 'unrelated company-wide redundancy announcement does not report phraseStrength "strong"');
 
   // --- matchInvite nameScore exposure (#2100 CodeRabbit major finding follow-up) ---
   const exactNameRows = [{ num: 501, company: 'Example Industries', role: 'Analyst', status: 'Applied', date: null, notes: '' }];

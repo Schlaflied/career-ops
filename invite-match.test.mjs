@@ -139,7 +139,7 @@ eq('"unfortunately" alone (benign reschedule) does not classify as rejection', r
 // A real rejection that happens to also use "unfortunately" alongside a
 // genuine strong rejection phrase must still classify as rejection — the
 // weak phrase is corroborating, not disqualifying.
-const weakPlusStrong = classifyEmail('Unfortunately, we regret to inform you that you have not been selected for this role.');
+const weakPlusStrong = classifyEmail('Unfortunately, we have decided not to move forward with your application for this role.');
 eq('"unfortunately" alongside a strong rejection phrase still classifies as rejection', weakPlusStrong.classification, 'rejection');
 
 // matchedPhrases must be exposed and populated so a human/agent can
@@ -227,7 +227,7 @@ function makeSandboxTracker(rows) {
 const fuzzySoleMatchRows = [
   { num: 601, company: 'Example Industries Global Holdings', role: 'Analyst', status: 'Applied', date: '2026-05-01', notes: '' },
 ];
-const fuzzySoleMatchText = 'Company: Example Industries\nWe regret to inform you that you have not been selected for this role.';
+const fuzzySoleMatchText = 'Company: Example Industries\nWe regret to inform you that we have decided not to move forward with your application for this role.';
 const fuzzySoleMatchResult = analyzeInvite(fuzzySoleMatchText, fuzzySoleMatchRows);
 eq('weak sole-match fixture: exactly one candidate matched (fuzzy, not exact, company name)', fuzzySoleMatchResult.candidates.length, 1);
 eq('weak sole-match fixture: the sole candidate is not an exact company-name match', fuzzySoleMatchResult.candidates[0].nameScore === 1, false);
@@ -260,6 +260,28 @@ eq('exact-company/weak-phrase fixture does not classify as rejection at all (ben
 // confirms selectApplyTarget is never even reached in that case since the
 // CLI's classification check runs first (see the --apply block in
 // invite-match.mjs).
+
+// --- maintainer finding, PR #2100 review comment 2026-08-07: realistic
+// non-rejection emails must never classify as `rejection`. This is the exact
+// asymmetry the review named: a false `rejection` marks a live application
+// dead via --apply's irreversible tracker write, while a missed rejection
+// only costs one unnecessary follow-up. Full realistic email bodies, not
+// isolated phrase fragments, since classifyEmail works on full text. ---
+
+const rescheduleFullEmail = 'Hi Jamie,\n\nThanks for your flexibility — we need to reschedule your interview to next week. Something came up on our end and we want to make sure we can give you our full attention. Would Tuesday or Thursday afternoon work?\n\nSorry for the back and forth.\n\nBest,\nRecruiting Team';
+const rescheduleFullResult = classifyEmail(rescheduleFullEmail);
+eq('realistic reschedule email does not classify as rejection', rescheduleFullResult.classification === 'rejection', false);
+eq('realistic reschedule email does not report phraseStrength "strong"', rescheduleFullResult.phraseStrength === 'strong', false);
+
+const delayApologyFullEmail = 'Hi Alex,\n\nApologies for the delay in getting back to you — we\'re still reviewing candidates for this role and expect to have an update within the next week. Thanks so much for your patience.\n\nBest,\nTalent Acquisition Team';
+const delayApologyFullResult = classifyEmail(delayApologyFullEmail);
+eq('realistic delay-apology email does not classify as rejection', delayApologyFullResult.classification === 'rejection', false);
+eq('realistic delay-apology email does not report phraseStrength "strong"', delayApologyFullResult.phraseStrength === 'strong', false);
+
+const redundancyFullEmail = 'Hi team,\n\nWe regret to inform everyone that, following today\'s town hall, the company will be closing our satellite office as part of a broader restructuring, and several roles across departments are affected. To be clear, this update is unrelated to any individual candidate applications currently in progress — those pipelines continue as normal.\n\nThank you for your understanding.\n\nPeople Team';
+const redundancyFullResult = classifyEmail(redundancyFullEmail);
+eq('unrelated company-wide redundancy announcement does not classify as rejection', redundancyFullResult.classification === 'rejection', false);
+eq('unrelated company-wide redundancy announcement does not report phraseStrength "strong"', redundancyFullResult.phraseStrength === 'strong', false);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {
