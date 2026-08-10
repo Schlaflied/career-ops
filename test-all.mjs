@@ -2429,6 +2429,51 @@ if (
   }
 }
 
+// --- Block G pay-transparency range-width signal (#2019, re-scoped #2280) ---
+{
+  // Maintainer direction (#2280): the jurisdiction table is gone — no
+  // external YAML, no legal threshold. Only the self-computed range-width
+  // heuristic (former 13a) survives; the corroborating missing-range
+  // sub-signal (former 13b) had no trigger without the table and was removed
+  // with it.
+  const ptPath = join(ROOT, 'templates', 'pay-transparency.yml');
+  if (existsSync(ptPath)) {
+    fail('templates/pay-transparency.yml should have been removed per maintainer direction (#2280)');
+  } else {
+    pass('templates/pay-transparency.yml removed — no jurisdiction table remains (#2280)');
+  }
+
+  // oferta.md carries the standalone, table-free range-width signal
+  const ptStart = ofertaMode.indexOf('Pay-Transparency Range-Width Check');
+  const ptEnd = ofertaMode.indexOf('### Output format:', Math.max(ptStart, 0));
+  const ptSection = ptStart >= 0 && ptEnd > ptStart ? ofertaMode.slice(ptStart, ptEnd) : '';
+  if (
+    ptSection &&
+    !ptSection.includes('templates/pay-transparency.yml') &&
+    !/13b/.test(ptSection) &&
+    ptSection.includes('general heuristic') &&
+    ptSection.includes('top - bottom > 0.5 × bottom') &&
+    ptSection.includes('Phrasing discipline (mandatory)') &&
+    ptSection.includes('not legal advice')
+  ) {
+    pass('oferta Block G has the table-free, self-computed pay-transparency range-width signal (#2280)');
+  } else {
+    fail('oferta Block G missing/incomplete pay-transparency range-width section — needs table-free arithmetic heuristic, "general heuristic" framing, the documented threshold formula (top - bottom > 0.5 × bottom), phrasing discipline, not-legal-advice note, and no leftover table/13b references (#2280)');
+  }
+
+  // Phrasing discipline holds in the report-facing text: the blockquote
+  // template the agent renders must state facts, never legal accusations.
+  // (The rule text itself may quote the banned phrases to forbid them,
+  // so only '>' lines — the rendered output templates — are scanned.)
+  const ptQuoteLines = ptSection.split('\n').filter((l) => l.trimStart().startsWith('>'));
+  const accusatory = ptQuoteLines.filter((l) => /illegal|violation|breaking the law/i.test(l));
+  if (ptSection && ptQuoteLines.length >= 1 && accusatory.length === 0) {
+    pass('pay-transparency report template states facts only — no "illegal"/"violation"/"breaking the law" assertions (#2280)');
+  } else {
+    fail(`pay-transparency phrasing discipline broken: ${accusatory.length ? `accusatory blockquote line(s): ${accusatory[0].trim().slice(0, 80)}` : 'expected 1+ blockquote output template in the section'} (#2280)`);
+  }
+}
+
 // --- Block G minimum-wage lawyer question (#2025, reshaped #2280) ---
 // Per maintainer direction on #2027: no jurisdiction wage table, no
 // comparison/assertion against any statutory rate. This signal only does
@@ -2450,7 +2495,7 @@ if (
   //    and JD-hours-first normalization are preserved, and no staleness/
   //    carve-out-eligibility machinery (which existed only to support the
   //    now-deleted table comparison) remains.
-  const mwStart = ofertaMode.indexOf('**13. Minimum-Wage Lawyer Question**');
+  const mwStart = ofertaMode.indexOf('**14. Minimum-Wage Lawyer Question**');
   const mwEnd = ofertaMode.indexOf('### Output format:', Math.max(mwStart, 0));
   const mwSection = mwStart >= 0 && mwEnd > mwStart ? ofertaMode.slice(mwStart, mwEnd) : '';
   if (
@@ -2564,7 +2609,7 @@ if (
   if (mwEnd > mwStart && mwStart >= 0) {
     pass('signal-13 section boundary (start of signal 13 to "### Output format:") resolved correctly for slicing (#2280)');
   } else {
-    fail('could not locate signal 13 ("**13. Minimum-Wage Lawyer Question**") or its end boundary in modes/oferta.md (#2280)');
+    fail('could not locate signal 14 ("**14. Minimum-Wage Lawyer Question**") or its end boundary in modes/oferta.md (#2280)');
   }
 }
 
@@ -5084,16 +5129,43 @@ console.log('\n12c. Materialized skill index mode');
 
 {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'career-ops-skill-git-'));
+  // The fixture stages the very paths career-ops legitimately tracks - .agents/,
+  // .claude/, .opencode/ - and those are exactly the paths agent-tool users
+  // exclude machine-wide. A fresh `git init` still honours the ambient global
+  // and system config, so on such a machine `git add` refused the path and the
+  // whole block aborted into a single "crashed" failure that read like a
+  // regression in materializeSkillEntrypoints (#2269).
+  //
+  // Fix the class rather than the instance: pin the global and system config to
+  // an empty file outside the fixture work tree, so nothing ambient reaches it -
+  // init.templateDir and core.autocrlf as much as core.excludesFile. Same shape
+  // as the GIT_CONFIG_GLOBAL pin in upgrade-tests.mjs. Empty on purpose; the
+  // fixture's own `git config` calls below set everything it actually needs.
+  const gitConfigRoot = mkdtempSync(join(tmpdir(), 'career-ops-skill-gitcfg-'));
+  const gitConfigPath = join(gitConfigRoot, 'gitconfig');
+  writeFileSync(gitConfigPath, '');
+  // That pin alone does NOT close the ignore path. When core.excludesFile is
+  // unset git falls back to the XDG default ~/.config/git/ignore, and that
+  // fallback is independent of which config file it just read - so the excludes
+  // path has to be pointed somewhere inert explicitly, below. An empty real file
+  // rather than /dev/null, which git rejects as an excludes source on Windows
+  // ("fatal: cannot use nul as an exclude file"); empty-string semantics work on
+  // both platforms tested but are not worth depending on.
+  const emptyExcludes = join(gitConfigRoot, 'empty-excludes');
+  writeFileSync(emptyExcludes, '');
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: gitConfigPath, GIT_CONFIG_SYSTEM: gitConfigPath };
   const gitRun = (args, opts = {}) => execFileSync('git', args, {
     cwd: fixtureRoot,
     encoding: 'utf-8',
     timeout: 30000,
+    env: gitEnv,
     ...opts,
   }).trim();
   const gitRaw = (args) => execFileSync('git', args, {
     cwd: fixtureRoot,
     encoding: 'utf-8',
     timeout: 30000,
+    env: gitEnv,
   });
 
   try {
@@ -5108,14 +5180,46 @@ console.log('\n12c. Materialized skill index mode');
     const pointer = '../../../.agents/skills/career-ops/SKILL.md';
 
     gitRun(['init']);
+    // core.excludesFile is only the GLOBAL layer. `git init` also seeds
+    // .git/info/exclude from a template, which GIT_TEMPLATE_DIR can still point
+    // at an ambient one, so empty that layer too rather than assume it is inert.
+    writeFileSync(join(fixtureRoot, '.git', 'info', 'exclude'), '');
     gitRun(['config', 'core.symlinks', 'false']);
+    gitRun(['config', 'core.excludesFile', emptyExcludes]);
     gitRun(['config', 'user.email', 'test@example.com']);
     gitRun(['config', 'user.name', 'Test User']);
 
     writeFileSync(join(canonicalDir, 'SKILL.md'), fixtureSkill);
     writeFileSync(join(claudeDir, 'SKILL.md'), pointer);
     writeFileSync(join(opencodeDir, 'SKILL.md'), pointer);
-    gitRun(['add', '--', '.agents/skills/career-ops/SKILL.md']);
+    // Guard the isolation itself, as a first-class assertion. If the pin above
+    // ever stops taking effect the fixture cannot stage its own input, and every
+    // assertion below collapses into a single "crashed" carrying git's ignore
+    // message - which reads as a regression in materializeSkillEntrypoints
+    // rather than an environment leak. Name the real cause here instead.
+    //
+    // Both shapes have to be caught, because git reports them differently: an
+    // ignored path named EXPLICITLY makes `git add` exit non-zero, while an
+    // ignored path merely covered by a directory pathspec (the `.claude/skills/`
+    // add further down) is skipped silently and exits 0. So run the add and the
+    // index check together, and let one assertion speak for both.
+    let canonicalStaged = '';
+    try {
+      gitRun(['add', '--', '.agents/skills/career-ops/SKILL.md']);
+      canonicalStaged = gitRun(['ls-files', '--', '.agents/skills/career-ops/SKILL.md']);
+    } catch {
+      // Left empty: the assertion below is the report.
+    }
+    if (canonicalStaged) {
+      pass('skill index-mode fixture is isolated from ambient git ignore rules (#2269)');
+    } else {
+      fail('skill index-mode fixture: canonical entrypoint did not stage - ambient git config reached the fixture (#2269)');
+      fail('materialized skill entrypoints stage as regular files, not symlink blobs (skipped: fixture not staged)');
+      fail('materialized skill blobs contain canonical skill content (skipped: fixture not staged)');
+      const reported = new Error('fixture staging precondition failed');
+      reported.alreadyReported = true;
+      throw reported;
+    }
 
     const pointerBlob = gitRun(['hash-object', '-w', '--stdin'], { input: pointer });
     gitRun(['update-index', '--add', '--cacheinfo', `120000,${pointerBlob},.claude/skills/career-ops/SKILL.md`]);
@@ -5143,9 +5247,12 @@ console.log('\n12c. Materialized skill index mode');
       fail('materialized skill blobs do not contain canonical skill content');
     }
   } catch (e) {
-    fail(`skill entrypoint index-mode test crashed: ${e.message}`);
+    // The staging-precondition branch already reported all three assertions
+    // individually; re-reporting here would double-count and re-bury the cause.
+    if (!e?.alreadyReported) fail(`skill entrypoint index-mode test crashed: ${e.message}`);
   } finally {
     rmSync(fixtureRoot, { recursive: true, force: true });
+    rmSync(gitConfigRoot, { recursive: true, force: true });
   }
 }
 
@@ -6307,17 +6414,70 @@ try {
 console.log('\n12. Follow-up cadence logic');
 
 try {
-  const cadence = await import(pathToFileURL(join(ROOT, 'followup-cadence.mjs')).href);
+  // Pin the cadence source BEFORE followup-cadence.mjs is evaluated (#2268).
+  // Its module-level `CADENCE = resolveCadenceConfig()` reads CAREER_OPS_PROFILE at
+  // import time and otherwise falls back to the USER's config/profile.yml - so the
+  // computeUrgency / computeNextFollowupDate cases below, which encode
+  // DEFAULT_CADENCE, went red on a perfectly healthy install where the user had
+  // customized followup_cadence. #2446 pinned the two standalone suites this way;
+  // this in-process import was the piece left over.
+  //
+  // The import below must stay DYNAMIC: ESM hoists static imports above every
+  // statement in the file, so a static import would evaluate the module before this
+  // assignment and the pin would silently do nothing.
+  const CADENCE_FIXTURE = join(ROOT, 'tests', 'fixtures', 'profile-default-cadence.yml');
+  const priorCadenceProfile = process.env.CAREER_OPS_PROFILE;
+  process.env.CAREER_OPS_PROFILE = CADENCE_FIXTURE;
 
-  // CLI regression: the import.meta.url guard must still let the module run as a CLI.
-  // Data-independent — default mode emits the result as JSON: a `metadata` object when
-  // the tracker has applications, or an `{error}` object (exit 1) when it is empty.
-  // Empty output would mean the guard wrongly suppressed main().
+  let cadence;
   let cliOut = '';
   try {
-    cliOut = execFileSync(NODE, [join(ROOT, 'followup-cadence.mjs')], { cwd: ROOT, encoding: 'utf-8', timeout: 30000 });
-  } catch (cliErr) {
-    cliOut = `${cliErr.stdout || ''}`; // exit 1 on an empty tracker is expected; keep stdout
+    cadence = await import(pathToFileURL(join(ROOT, 'followup-cadence.mjs')).href);
+
+    // CLI regression: the import.meta.url guard must still let the module run as a CLI.
+    // Data-independent — default mode emits the result as JSON: a `metadata` object when
+    // the tracker has applications, or an `{error}` object (exit 1) when it is empty.
+    // Empty output would mean the guard wrongly suppressed main().
+    //
+    // The pin is passed explicitly: this is a FRESH process, so it re-resolves the
+    // profile on its own and would otherwise read the user's config/profile.yml no
+    // matter what the parent set.
+    try {
+      cliOut = execFileSync(NODE, [join(ROOT, 'followup-cadence.mjs')], {
+        cwd: ROOT,
+        encoding: 'utf-8',
+        timeout: 30000,
+        env: { ...process.env, CAREER_OPS_PROFILE: CADENCE_FIXTURE },
+      });
+    } catch (cliErr) {
+      cliOut = `${cliErr.stdout || ''}`; // exit 1 on an empty tracker is expected; keep stdout
+    }
+  } finally {
+    // Restore immediately. followup-cadence.mjs froze CADENCE at import above, so the
+    // pin has already done its job, and other modules read the same variable
+    // (scan.mjs, cv-templates.mjs, providers/_profile-keywords.mjs, plugins/_engine.mjs)
+    // - later sections must not silently inherit the fixture.
+    if (priorCadenceProfile === undefined) delete process.env.CAREER_OPS_PROFILE;
+    else process.env.CAREER_OPS_PROFILE = priorCadenceProfile;
+  }
+
+  // Guard the pin itself: if it ever stops taking effect, the two cadence-dependent
+  // blocks below revert to silently asserting against whatever the developer happens
+  // to have configured. This fails loudly instead.
+  //
+  // The module-private CADENCE isn't exported, but resolveCadenceConfig() with no
+  // arguments re-reads the same module-level PROFILE_FILE that CADENCE was built
+  // from - which was resolved from CAREER_OPS_PROFILE at import time. So this is a
+  // faithful proxy for "the pin was in place when the module was evaluated".
+  {
+    const pinned = cadence.resolveCadenceConfig();
+    const drift = Object.keys(cadence.DEFAULT_CADENCE)
+      .filter((k) => pinned[k] !== cadence.DEFAULT_CADENCE[k]);
+    if (drift.length === 0) {
+      pass('section 12 pins CAREER_OPS_PROFILE, so cadence resolves to the documented defaults');
+    } else {
+      fail(`section 12 cadence pin did not take effect - drifted keys: ${drift.join(', ')} (got ${JSON.stringify(pinned)})`);
+    }
   }
   let cliJson = null;
   try { cliJson = JSON.parse(cliOut.trim()); } catch { /* leave null → fail below */ }
@@ -8227,6 +8387,71 @@ try {
   }
 } catch (e) {
   fail(`dedup blind-via channel key tests crashed (#2393): ${e.message}`);
+}
+
+// ── DEDUP ORDINARY COMPANY KEY: NON-LATIN COMPANIES (#2429) ──
+// The sibling of the blind-via case directly above, on the path that runs for
+// every normal row. #2429 made tracker-utils.mjs's normalizeCompany
+// Unicode-aware and merge-tracker/set-status inherited it, but dedup-tracker
+// carried its own local [^a-z0-9] copy, so two DIFFERENT companies written in
+// a non-Latin script both keyed to '' and one row was deleted outright.
+// Controls: punctuation/spacing variants of one Latin employer must still
+// merge, and two distinct Latin employers must still stay apart.
+console.log('\n🧪 Testing dedup company key with non-Latin companies (#2429)...');
+try {
+  const coDedupTmp = mkdtempSync(join(tmpdir(), 'career-ops-dedup-company-'));
+  try {
+    mkdirSync(join(coDedupTmp, 'data'));
+    const tracker = join(coDedupTmp, 'data', 'applications.md');
+    writeFileSync(tracker,
+      '# Applications Tracker\n\n' +
+      '| # | Date | Company | Via | Role | Score | Status | PDF | Report | Notes |\n' +
+      '|---|------|---------|-----|------|-------|--------|-----|--------|-------|\n' +
+      // (a) Two DIFFERENT non-Latin employers, same role — two real
+      // applications, both must survive.
+      '| 71 | 2026-04-01 | アクメ株式会社 | — | Backend Engineer | 4.2/5 | Evaluated | ❌ | [71](../reports/071-a.md) | first company |\n' +
+      '| 72 | 2026-04-02 | グロベックス合同会社 | — | Backend Engineer | 3.0/5 | Evaluated | ❌ | [72](../reports/072-b.md) | different company |\n' +
+      // (b) Control: presentation variants of ONE Latin employer still merge.
+      '| 73 | 2026-04-03 | Acme (Inc.) | — | Data Engineer | 3.1/5 | Evaluated | ❌ | [73](../reports/073-c.md) | punctuated |\n' +
+      '| 74 | 2026-04-04 | Acme Inc | — | Data Engineer | 4.5/5 | Evaluated | ❌ | [74](../reports/074-d.md) | same employer |\n' +
+      // (c) Control: two distinct Latin employers still stay apart.
+      '| 75 | 2026-04-05 | Globex | — | Platform Engineer | 3.9/5 | Evaluated | ❌ | [75](../reports/075-e.md) | one |\n' +
+      '| 76 | 2026-04-06 | Initech | — | Platform Engineer | 4.0/5 | Evaluated | ❌ | [76](../reports/076-f.md) | another |\n');
+
+    const r = run(NODE, ['dedup-tracker.mjs'], { env: { ...process.env, CAREER_OPS_TRACKER: tracker } });
+    if (r === null) {
+      fail('dedup-tracker.mjs crashed during non-Latin company key test (#2429)');
+    } else {
+      const out = readFileSync(tracker, 'utf-8');
+
+      const backendRows = out.split('\n').filter(l => l.includes('Backend Engineer'));
+      if (backendRows.length === 2
+          && backendRows.some(l => l.includes('アクメ株式会社'))
+          && backendRows.some(l => l.includes('グロベックス合同会社'))) {
+        pass('dedup-tracker keeps two distinct non-Latin companies apart (#2429)');
+      } else {
+        fail(`dedup-tracker merged distinct non-Latin companies: ${backendRows.length} Backend Engineer rows`);
+      }
+
+      const dataRows = out.split('\n').filter(l => l.includes('Data Engineer'));
+      if (dataRows.length === 1 && dataRows[0].includes('4.5/5')) {
+        pass('dedup-tracker still merges punctuation variants of one Latin employer (#2429)');
+      } else {
+        fail(`dedup-tracker Latin punctuation merge broken: ${dataRows.length} Data Engineer rows`);
+      }
+
+      const platformRows = out.split('\n').filter(l => l.includes('Platform Engineer'));
+      if (platformRows.length === 2) {
+        pass('dedup-tracker still keeps two distinct Latin employers apart (#2429)');
+      } else {
+        fail(`dedup-tracker merged distinct Latin employers: ${platformRows.length} Platform Engineer rows`);
+      }
+    }
+  } finally {
+    rmSync(coDedupTmp, { recursive: true, force: true });
+  }
+} catch (e) {
+  fail(`dedup company key tests crashed (#2429): ${e.message}`);
 }
 
 // ── VERIFY-PIPELINE GROUPING KEYS: NON-LATIN COMPANIES AND ROLES (#2393) ──
@@ -12260,6 +12485,212 @@ try {
   } else {
     warn('web/src/lib/career-ops.ts not found — web layer moved? update contract freeze section');
   }
+
+  // 55.6 pdf mode must never hand the agent write access (#2185).
+  // The web's "pdf" agent tailors content and nothing else: it emits the CV
+  // through a <<cv-html>> envelope and the BACKEND writes every file. A write
+  // grant here would be unscoped, so a prompt injection in a posting or report
+  // (both enter that agent's context) could redirect it at cv.md.
+  //
+  // Asserted on VALUES — the built argv and the built prompt. FIVE source-text
+  // versions of this guard were defeated by rewriting route.ts around them (see
+  // web/src/lib/claude-invocation.mjs's header). The one structural rule left is
+  // that route.ts may not spell a tool flag itself, which is what stops an inline
+  // argv from hiding beside a legitimate claudeCliArgs() call.
+  //
+  // In the REQUIRED suite on purpose: web-ci.yml is informative-only, so asserting
+  // this only there would gate nothing. Importing is safe — these are
+  // dependency-free ESM modules and the root suite runs on Node >= 18.
+  const webLib = join(ROOT, 'web', 'src', 'lib');
+  const runRoutePath = join(ROOT, 'web', 'src', 'app', 'api', 'run', 'route.ts');
+  if (!existsSync(webLib)) {
+    // Expected for a data-only install: web/ is in no SYSTEM_PATHS entry.
+    warn('web/ not present in this checkout — skipping the pdf write-scope freeze (#2185)');
+  } else {
+    // web/ IS here, so a missing file means a move, not an absence — fail rather
+    // than skip, because a skip is how this freeze would silently stop guarding.
+    const required = {
+      'claude-invocation.mjs': join(webLib, 'claude-invocation.mjs'),
+      'cv-envelope.mjs': join(webLib, 'cv-envelope.mjs'),
+      'run-prompts.mjs': join(webLib, 'run-prompts.mjs'),
+      'api/run/route.ts': runRoutePath,
+    };
+    const missing = Object.entries(required).filter(([, f]) => !existsSync(f)).map(([name]) => name);
+    if (missing.length > 0) {
+      fail(`web/ exists but ${missing.join(', ')} is missing — the #2185 write-scope freeze cannot verify (was it moved?)`);
+    } else {
+      let invocation;
+      let prompts;
+      try {
+        invocation = await import(pathToFileURL(required['claude-invocation.mjs']).href);
+        prompts = await import(pathToFileURL(required['run-prompts.mjs']).href);
+        // Imported for its side effect of resolving: run-prompts pulls cv-envelope
+        // for CV_ENVELOPE_INSTRUCTION, so a break there would surface here anyway,
+        // but naming it keeps the failure message specific.
+        await import(pathToFileURL(required['cv-envelope.mjs']).href);
+      } catch (err) {
+        fail(`web pdf write-scope modules could not be imported (${err.message}) — the #2185 freeze cannot verify`);
+      }
+      // Gate the web unit suites from the REQUIRED check too. web-ci.yml is
+      // informative-only, so without this a contributor strengthening those files
+      // adds nothing to CI. This deliberately overlaps the value assertions below:
+      // those give a named, greppable #2185 signal and still hold if the web suite
+      // is ever trimmed, which is the failure this section exists to catch.
+      // Discovered, not hand-listed: a list silently stops gating whatever is added
+      // next, and this section previously covered 4 of the 6 files present.
+      let webUnits = [];
+      try {
+        webUnits = readdirSync(join(ROOT, 'web', 'tests', 'lib'))
+          .filter((f) => f.endsWith('.test.mjs'))
+          .sort()
+          .map((f) => `web/tests/lib/${f}`);
+      } catch (err) {
+        // Fail rather than throw to the outer catch, which would skip every value
+        // assertion below while reporting only "freeze section crashed".
+        fail(`web/tests/lib is unreadable (${err.message}) — the #2185 unit suites cannot be gated`);
+      }
+      // Three distinct states, so the message never misdescribes the failure: the
+      // unreadable case already called fail() above, an empty directory is its own
+      // fault, and only a non-empty list is actually run.
+      if (webUnits.length === 0) {
+        if (existsSync(join(ROOT, 'web', 'tests', 'lib'))) {
+          fail('web/tests/lib contains no *.test.mjs — the #2185 unit suites are not being gated');
+        }
+      } else if (run(NODE, ['--test', ...webUnits], { timeout: 180000 }) !== null) {
+        pass('web pdf write-scope unit suites pass (#2185)');
+      } else {
+        // The signal distinguishes a timeout/kill from an assertion failure —
+        // run()'s default 30s is short for six suites in one child process.
+        const killed = lastRunFailure()?.signal;
+        fail(`web pdf write-scope unit suites failed${killed ? ` (killed: ${killed})` : ''} (run: node --test ${webUnits.join(' ')})`);
+      }
+
+      if (invocation && prompts) {
+        const { claudeCliArgs, argValue, toolNames, grantsWriteCapability, WRITE_CAPABLE_TOOLS } = invocation;
+        const pdfArgs = claudeCliArgs({ kind: 'pdf', prompt: 'freeze-probe' });
+        const allowed = argValue(pdfArgs, '--allowedTools');
+        const disallowed = argValue(pdfArgs, '--disallowedTools');
+
+        if (!grantsWriteCapability({ allowed, disallowed })) {
+          pass('web pdf command line grants no write-capable tool (#2185)');
+        } else {
+          const granted = WRITE_CAPABLE_TOOLS.filter((t) => toolNames(allowed).includes(t));
+          fail(`web pdf command line grants write access via ${granted.join(', ')} — an unscoped write grant is the #2185 hole`);
+        }
+
+        // Denied by name, not merely omitted: --permission-mode acceptEdits exists
+        // to auto-approve edit tools, so "unmentioned" is the one status a
+        // file-writing tool must never have.
+        const undenied = WRITE_CAPABLE_TOOLS.filter((t) => !toolNames(disallowed).includes(t));
+        if (undenied.length === 0) {
+          pass('web pdf command line explicitly denies every write-capable tool (#2185)');
+        } else {
+          fail(`web pdf command line no longer denies ${undenied.join(', ')} — #2172/#2185 guardrail weakened`);
+        }
+
+        // EVERY kind, not just pdf: a write tool that is neither allowed nor denied
+        // can still be auto-approved by --permission-mode acceptEdits, and a
+        // pdf-only probe let exactly that ship for the persisting kinds.
+        const unmentioned = [];
+        for (const kind of invocation.KNOWN_KINDS) {
+          const scope = invocation.toolScopeFor(kind);
+          const named = [...toolNames(scope.allowed), ...toolNames(scope.disallowed)];
+          for (const tool of WRITE_CAPABLE_TOOLS) {
+            if (!named.includes(tool)) unmentioned.push(`${kind}:${tool}`);
+          }
+        }
+        if (unmentioned.length === 0) {
+          pass('web tool scopes leave no write-capable tool unmentioned for any kind (#2185)');
+        } else {
+          fail(`web tool scopes leave ${unmentioned.join(', ')} neither allowed nor denied — acceptEdits may auto-approve them (#2185)`);
+        }
+
+        // The PROMPT is asserted by run-prompts.test.mjs, which this section already
+        // runs above — restating its regexes here would be two copies of one intent.
+        // What is checked here is only what that suite cannot see: that the shipped
+        // prompt is the one the route actually sends (below).
+        // The one structural rule: the route delegates its argv. If it spells any
+        // tool flag itself, an inline pdf arm could grant writes while every value
+        // check above still describes claudeCliArgs's untouched output.
+        // Strip comments with a scanner that respects string and template literals.
+        // A `.replace(/\/\/.*$/, '')` per line also fires inside strings: a URL on the
+        // same line as a tool flag deletes the flag, so a route spelling its own
+        // --allowedTools would pass unnoticed. Only `//` OUTSIDE a literal is a comment.
+        const stripJsComments = (src) => {
+          let out = '';
+          let quote = null;   // "'" | '"' | '`' when inside a literal
+          let block = false;  // inside a /* */ comment
+          let line = false;   // inside a // comment
+          for (let i = 0; i < src.length; i++) {
+            const c = src[i];
+            const next = src[i + 1];
+            if (line) { if (c === '\n') { line = false; out += c; } continue; }
+            if (block) { if (c === '*' && next === '/') { block = false; i++; } continue; }
+            if (quote) {
+              // A backslash escapes the next character, so an escaped quote does not
+              // close the literal and an escaped backslash does not escape what follows.
+              if (c === '\\') { out += c + (next ?? ''); i++; continue; }
+              if (c === quote) quote = null;
+              out += c;
+              continue;
+            }
+            if (c === '/' && next === '/') { line = true; continue; }
+            if (c === '/' && next === '*') { block = true; i++; continue; }
+            // A `/` here can also open a REGEX literal, and a quote inside one (say
+            // /["']/) would otherwise flip the scanner into string state and swallow
+            // the rest of the file. Distinguish regex from division the usual way:
+            // regex can only follow an operator or an opener, never a value.
+            if (c === '/') {
+              const prev = out.replace(/\s+$/, '').slice(-1);
+              if (prev === '' || '(,=:[!&|?{};+-*%~^<>'.includes(prev)) {
+                out += c;
+                for (i++; i < src.length; i++) {
+                  const r = src[i];
+                  out += r;
+                  if (r === '\\') { out += src[i + 1] ?? ''; i++; continue; }
+                  if (r === '[') { // a class can contain an unescaped `/`
+                    for (i++; i < src.length && src[i] !== ']'; i++) {
+                      out += src[i];
+                      if (src[i] === '\\') { out += src[i + 1] ?? ''; i++; }
+                    }
+                    out += src[i] ?? '';
+                    continue;
+                  }
+                  if (r === '/' || r === '\n') break;
+                }
+                continue;
+              }
+            }
+            if (c === '"' || c === "'" || c === '`') { quote = c; out += c; continue; }
+            out += c;
+          }
+          return out;
+        };
+        const routeCode = stripJsComments(readFileSync(runRoutePath, 'utf-8'))
+          .split('\n')
+          .filter((l) => !/^\s*import\b/.test(l))
+          .join('\n');
+        const spelledFlags = ['--allowedTools', '--disallowedTools', '--permission-mode']
+          .filter((flag) => routeCode.includes(flag));
+        const argvCallSites = (routeCode.match(/claudeCliArgs\s*\(/g) ?? []).length;
+        // `kind` must reach claudeCliArgs as a SHORTHAND property. Property order
+        // and line wrapping are free, but `{ kind: <anything> }` is refused:
+        // `claudeCliArgs({ kind: kind === "pdf" ? "evaluate" : kind, prompt })`
+        // once passed every check while pdf received the persisting scope.
+        const passesKindVerbatim = /claudeCliArgs\s*\(\s*\{(?:[^{}]*,)?\s*kind\s*[,}]/.test(routeCode);
+        if (spelledFlags.length === 0 && argvCallSites === 1 && passesKindVerbatim) {
+          pass('web run route delegates its whole argv, spelling no tool flag and remapping no kind (#2185)');
+        } else {
+          const why = spelledFlags.length > 0
+            ? `it spells ${spelledFlags.join(', ')} itself`
+            : argvCallSites !== 1
+              ? `it builds argv at ${argvCallSites} site(s), expected exactly 1`
+              : 'it does not pass `kind` through verbatim (a remapped kind hands pdf another kind\'s scope)';
+          fail(`web run route no longer delegates its argv — ${why}, so the value checks above may not describe what pdf actually ships (#2185)`);
+        }
+      }
+    }
+  }
 } catch (e) {
   fail(`core↔web contract freeze section crashed: ${e.message}`);
 }
@@ -13411,7 +13842,7 @@ console.log('\n69. Jurisdiction-prohibited content signal (#2018)');
   // sentence, the new sections must not contain employer-lawbreaking language.
   const signal9 = ofertaMode.slice(
     ofertaMode.indexOf('**12. Jurisdiction-Prohibited Content**'),
-    ofertaMode.indexOf('**13. Minimum-Wage Lawyer Question**')
+    ofertaMode.indexOf('**13. Pay-Transparency Range-Width Check**')
   );
   const step5c = applyMode.slice(
     applyMode.indexOf('## Step 5c — Jurisdiction-prohibited content check'),
