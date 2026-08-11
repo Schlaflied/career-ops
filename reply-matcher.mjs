@@ -83,6 +83,12 @@ export function checkRoleMatchExact(text, role) {
 
   const tNorm = normalizeStr(text);
   const rNorm = normalizeStr(role);
+  // A whitespace-only role normalizes to '' (normalizeStr strips whitespace),
+  // and String.prototype.includes('') is always true — without this guard a
+  // blank role would "exactly" match any text at all, bypassing corroboration
+  // entirely. isSingleWordRole doesn't catch this: splitting a whitespace-only
+  // string on separators yields zero parts, not one.
+  if (!rNorm) return false;
   if (tNorm.includes(rNorm)) return true;
 
   // Handle Chinese role titles ignoring symbols

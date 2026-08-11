@@ -83,6 +83,16 @@ test('checkRoleMatchExact - a single-word role, even a specific one, never count
   assert.ok(checkRoleMatch('We are excited to have you interview as an Engineer.', 'Engineer'));
 });
 
+test('checkRoleMatchExact - a whitespace-only role never matches (CodeRabbit #2672)', () => {
+  // normalizeStr(' ') === '', and ''.includes('') === true for any text, so a
+  // blank role must be explicitly rejected — otherwise it would "exactly"
+  // match arbitrary text and bypass corroboration entirely. isSingleWordRole
+  // doesn't catch this: splitting a whitespace-only string on separators
+  // yields zero parts, not one.
+  assert.equal(checkRoleMatchExact('Completely unrelated message about anything at all.', '   '), false);
+  assert.equal(checkRoleMatchExact('Completely unrelated message about anything at all.', ' '), false);
+});
+
 test('getAppDomains - drops prose tokens and filenames, keeps real hostnames', () => {
   const app = {
     num: 68,
