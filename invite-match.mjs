@@ -313,6 +313,19 @@ export function extractReqId(text) {
 // extractPlatform()'s return contract (still a plain platform-name string);
 // it's read separately by isAIInterviewerPlatform() below so existing
 // extractPlatform() callers are unaffected.
+//
+// This flag is only ever set `true` when the *host alone* reliably confirms
+// AI-led modality for every invite that host can appear in. That is true
+// for Alex/Apriora (a single-purpose AI-interviewer product — there is no
+// human-conducted call on that host) but NOT for HireVue: HireVue is a
+// multi-modal platform whose `hirevue.com` hosts serve on-demand recorded
+// screening, live human-conducted interviews scheduled through the
+// platform, and a separate "AI Interviewer" product, all under the same
+// domain. No public discriminator (subdomain, path) reliably distinguishes
+// which modality a given hirevue.com invite link is for, so a HireVue match
+// stays `isAIInterviewer: false` here — HireVue is still detected and named
+// by extractPlatform(), it just isn't asserted as confirmed-AI. If HireVue
+// later exposes a reliable discriminator, promote its entry then.
 const PLATFORM_URL_PATTERNS = [
   { name: 'Zoom', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?zoom\.us(?::\d{1,5})?(?:[/?#\s]|$)/i, isAIInterviewer: false },
   { name: 'Microsoft Teams', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?teams\.(?:microsoft|live)\.com(?::\d{1,5})?(?:[/?#\s]|$)/i, isAIInterviewer: false },
@@ -320,10 +333,13 @@ const PLATFORM_URL_PATTERNS = [
   // Alex/Apriora — AI-interviewer platform, post-rebrand from a 2024 public
   // glitch incident. `meet.alex.com` and bare `alex.com` are both real
   // invite hosts; the optional-subdomain shape already covers both, same as
-  // the Zoom pattern above.
+  // the Zoom pattern above. Always AI-led by product design.
   { name: 'Alex', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?alex\.com(?::\d{1,5})?(?:[/?#\s]|$)/i, isAIInterviewer: true },
-  // HireVue — AI-interviewer / on-demand video-screening platform.
-  { name: 'HireVue', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?hirevue\.com(?::\d{1,5})?(?:[/?#\s]|$)/i, isAIInterviewer: true },
+  // HireVue — multi-modal video-screening platform (on-demand recorded,
+  // live human-conducted, and a separate AI Interviewer product all share
+  // this domain). Detected and named, but NOT asserted as confirmed-AI —
+  // see the comment above the array.
+  { name: 'HireVue', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?hirevue\.com(?::\d{1,5})?(?:[/?#\s]|$)/i, isAIInterviewer: false },
 ];
 
 // A plain phone number, used only when no meeting-platform URL was found —
@@ -357,14 +373,22 @@ export function extractPlatform(text) {
 }
 
 /**
- * Whether the call platform detected in `text` is an AI-interviewer
+ * Whether the call platform detected in `text` is a CONFIRMED AI-interviewer
  * platform (#2673) — the candidate has a live conversation with an AI
- * system rather than a human panel (Alex/Apriora, HireVue). Deliberately a
- * separate boolean helper rather than a change to extractPlatform()'s
- * return contract, so existing callers (interview-prep.md's Platform field,
- * analyzeInvite() below) keep working unmodified. Same "never guessed"
- * discipline as extractPlatform(): pure pattern matching against the same
- * PLATFORM_URL_PATTERNS table, false when nothing plausible is found.
+ * system rather than a human panel. Currently true only for Alex/Apriora,
+ * whose host is single-purpose and always AI-led by product design.
+ * HireVue is deliberately excluded even though it's detected by
+ * extractPlatform(): it's a multi-modal platform (on-demand recorded,
+ * live human-conducted, and a separate AI Interviewer product all share the
+ * `hirevue.com` domain) with no public discriminator that reliably tells
+ * which modality a given invite link is for, so asserting AI-led for every
+ * HireVue match would be a guess, not a detection — see the comment above
+ * PLATFORM_URL_PATTERNS. Deliberately a separate boolean helper rather than
+ * a change to extractPlatform()'s return contract, so existing callers
+ * (interview-prep.md's Platform field, analyzeInvite() below) keep working
+ * unmodified. Same "never guessed" discipline as extractPlatform(): pure
+ * pattern matching against the same PLATFORM_URL_PATTERNS table, false when
+ * nothing plausible — or nothing *confirmed* — is found.
  *
  * @param {string} text - Raw pasted invite/scheduling text.
  * @returns {boolean}
@@ -846,9 +870,15 @@ function runSelfTest() {
   // --- AI-interviewer platforms (#2673) ---
   check(extractPlatform('Your interview link: https://meet.alex.com/room/abc123') === 'Alex', 'detects Alex from a meet.alex.com URL');
   check(extractPlatform('Please join at https://alex.com/i/xyz789') === 'Alex', 'detects Alex from a bare alex.com URL');
+  // HireVue is detected and named as a platform...
   check(extractPlatform('Complete your on-demand interview: https://app.hirevue.com/interview/abc') === 'HireVue', 'detects HireVue from a hirevue.com URL');
+  // ...but is NOT asserted as confirmed-AI: HireVue hosts on-demand
+  // recorded screening, live human-conducted interviews, and a separate AI
+  // Interviewer product on the same domain with no reliable public
+  // discriminator between them (CodeRabbit review on #2676), so asserting
+  // AI-led for every hirevue.com match would be a guess, not a detection.
+  check(isAIInterviewerPlatform('Complete your on-demand interview: https://app.hirevue.com/interview/abc') === false, 'isAIInterviewerPlatform is false for a HireVue URL — modality unconfirmed, not asserted AI-led');
   check(isAIInterviewerPlatform('Your interview link: https://meet.alex.com/room/abc123') === true, 'isAIInterviewerPlatform is true for an Alex URL');
-  check(isAIInterviewerPlatform('Complete your on-demand interview: https://app.hirevue.com/interview/abc') === true, 'isAIInterviewerPlatform is true for a HireVue URL');
   check(isAIInterviewerPlatform('Join via Zoom: https://us02web.zoom.us/j/1234567890') === false, 'isAIInterviewerPlatform is false for a human-mediated Zoom URL');
   check(isAIInterviewerPlatform('We will call you at (416) 555-0199 for the screen.') === false, 'isAIInterviewerPlatform is false for a plain phone number');
   check(isAIInterviewerPlatform('') === false, 'isAIInterviewerPlatform is false for empty text');
