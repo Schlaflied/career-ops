@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { matchInvite, normalizeCompanyName, extractPlatform, classifyEmail, analyzeInvite, applyRejectionStatus, selectApplyTarget } from './invite-match.mjs';
+import { matchInvite, normalizeCompanyName, extractPlatform, isAIInterviewerPlatform, classifyEmail, analyzeInvite, applyRejectionStatus, selectApplyTarget } from './invite-match.mjs';
 
 let passed = 0;
 let failed = 0;
@@ -121,6 +121,44 @@ eq('does not detect a platform-looking query value (Google Meet)', extractPlatfo
 eq('Zoom URL with explicit port detected as Zoom', extractPlatform('Join: https://zoom.us:443/j/123456789'), 'Zoom');
 eq('Microsoft Teams URL with explicit port detected as Microsoft Teams', extractPlatform('https://teams.microsoft.com:8443/l/meetup-join/abc'), 'Microsoft Teams');
 eq('Google Meet URL with explicit port detected as Google Meet', extractPlatform('https://meet.google.com:443/xyz-abcd-efg'), 'Google Meet');
+
+// extractPlatform + isAIInterviewerPlatform — AI-interviewer platform
+// detection (issue #2673). Alex/Apriora and HireVue are candidate-facing AI
+// systems rather than human-mediated calls, so they get their own platform
+// names from extractPlatform() (matching the existing Zoom/Teams/Meet naming
+// convention: a specific platform name, not a generic label) plus a separate
+// boolean signal from isAIInterviewerPlatform() that leaves extractPlatform()'s
+// own return contract untouched.
+eq('Alex (meet.alex.com) URL detected as Alex', extractPlatform('Your interview link: https://meet.alex.com/room/abc123'), 'Alex');
+eq('Alex (bare alex.com) URL detected as Alex', extractPlatform('Please join at https://alex.com/i/xyz789'), 'Alex');
+eq('HireVue URL detected as HireVue', extractPlatform('Complete your on-demand interview: https://app.hirevue.com/interview/abc'), 'HireVue');
+eq('HireVue URL with explicit port detected as HireVue', extractPlatform('https://hirevue.com:443/interview/abc'), 'HireVue');
+
+eq('isAIInterviewerPlatform is true for an Alex URL', isAIInterviewerPlatform('Your interview link: https://meet.alex.com/room/abc123'), true);
+eq('isAIInterviewerPlatform is true for a bare alex.com URL', isAIInterviewerPlatform('Please join at https://alex.com/i/xyz789'), true);
+eq('isAIInterviewerPlatform is true for a HireVue URL', isAIInterviewerPlatform('Complete your on-demand interview: https://app.hirevue.com/interview/abc'), true);
+
+// Existing Zoom/Teams/Meet/Phone paths must remain unaffected by the new
+// AI-interviewer patterns — both in what extractPlatform() reports and in
+// isAIInterviewerPlatform() correctly reporting false for all of them.
+eq('Zoom URL still detected as Zoom (unaffected by AI-interviewer patterns)', extractPlatform('Join: https://us05web.zoom.us/j/9998887777'), 'Zoom');
+eq('Microsoft Teams URL still detected as Microsoft Teams (unaffected by AI-interviewer patterns)', extractPlatform('https://teams.microsoft.com/l/meetup-join/abc'), 'Microsoft Teams');
+eq('Google Meet URL still detected as Google Meet (unaffected by AI-interviewer patterns)', extractPlatform('https://meet.google.com/xyz-abcd-efg'), 'Google Meet');
+eq('phone number still detected as Phone (unaffected by AI-interviewer patterns)', extractPlatform('We will call you at 416-555-0199 for the screen.'), 'Phone');
+eq('isAIInterviewerPlatform is false for a Zoom URL', isAIInterviewerPlatform('Join: https://us05web.zoom.us/j/9998887777'), false);
+eq('isAIInterviewerPlatform is false for a Microsoft Teams URL', isAIInterviewerPlatform('https://teams.microsoft.com/l/meetup-join/abc'), false);
+eq('isAIInterviewerPlatform is false for a Google Meet URL', isAIInterviewerPlatform('https://meet.google.com/xyz-abcd-efg'), false);
+eq('isAIInterviewerPlatform is false for a phone-only invite', isAIInterviewerPlatform('We will call you at 416-555-0199 for the screen.'), false);
+eq('isAIInterviewerPlatform is false when nothing plausible is present', isAIInterviewerPlatform('Please confirm your availability for the interview.'), false);
+eq('isAIInterviewerPlatform is false for empty text', isAIInterviewerPlatform(''), false);
+
+// Lookalike hosts must not be detected as Alex/HireVue either, same
+// discipline as the existing Zoom/Teams/Meet lookalike-host guards.
+eq('lookalike host (notalex.com) is not detected as Alex', extractPlatform('Please visit https://notalex.com for details.'), null);
+eq('email address containing alex.com is not detected as Alex', extractPlatform('Contact support@alex.com with questions.'), null);
+eq('lookalike host (nothirevue.com) is not detected as HireVue', extractPlatform('Please visit https://nothirevue.com for details.'), null);
+eq('does not detect a platform-looking URL path (Alex)', extractPlatform('See https://example.com/alex.com for details.'), null);
+eq('does not detect a platform-looking URL path (HireVue)', extractPlatform('See https://example.com/hirevue.com for details.'), null);
 
 // --- #2098: rejection classification is unaffected-invite-classification regression check ---
 

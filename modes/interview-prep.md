@@ -120,6 +120,19 @@ If the company is small or obscure and yields few results, broaden: search for t
 
 If data is insufficient for any field, write "unknown — not enough data" rather than guessing.
 
+**AI-interviewer platforms (#2673):** when `invite-match.mjs`'s `isAIInterviewerPlatform` returns true for the invite/scheduling text (currently Alex/Apriora and HireVue), the candidate talks live to an AI system rather than a human — append an **AI-Interviewer Notes** block right after Process Overview:
+
+```markdown
+## AI-Interviewer Notes
+This round is conducted by an AI interviewer ({platform}), not a human panel. Prep differs from a human call:
+- No human rapport or reading-the-room available — camera eye contact and steady pacing matter more, not less.
+- The AI generates adaptive follow-up questions from the literal content of your answers, so vague or generic answers get probed harder than with a human interviewer. Answer with specifics.
+- Don't read from a script — it reads as unnatural to the AI's follow-up generation.
+- If the call glitches mid-conversation (transcription errors, repeated or looping questions), that is a known issue on some AI-interviewer platforms — documented for Alex/Apriora specifically — not a signal you did something wrong. Stay calm and keep answering normally.
+```
+
+Skip this block entirely when the platform is human-mediated or not detected.
+
 ## Step 2.5 — Audience Map
 
 Classify each round from Step 2 into exactly one audience. The audience drives what gets prioritized in Steps 4 and 7.
@@ -170,6 +183,8 @@ For each round discovered in research:
 If round structure is unknown, state that and provide the best available intel on what types of rounds to expect based on company size, stage, and role level.
 
 When a round's Platform is known, add one logistics line to "How to prepare": for a video platform (Zoom / Microsoft Teams / Google Meet), a reminder to check camera, lighting, and background in advance; for Phone, a reminder to confirm a quiet space and good signal. Skip this line when Platform is not stated.
+
+When `isAIInterviewerPlatform` is true for that round's invite text (Alex/Apriora, HireVue), replace that logistics line with a pointer to the AI-Interviewer Notes block above instead of the video-platform reminder — e.g. "AI-interviewer round ({platform}) — see AI-Interviewer Notes above."
 
 ## Step 4 — Likely Questions (per audience)
 

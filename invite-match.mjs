@@ -307,10 +307,23 @@ export function extractReqId(text) {
 // the host and the following delimiter, since a URL authority may legally
 // include one (`https://zoom.us:443/j/123456789`) and rejecting it would
 // silently drop otherwise-legitimate invite links.
+// The `isAIInterviewer` flag distinguishes AI-interviewer platforms (#2673)
+// — where the candidate talks live to an AI system instead of a human —
+// from the human-mediated platforms above. It does NOT change
+// extractPlatform()'s return contract (still a plain platform-name string);
+// it's read separately by isAIInterviewerPlatform() below so existing
+// extractPlatform() callers are unaffected.
 const PLATFORM_URL_PATTERNS = [
-  { name: 'Zoom', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?zoom\.us(?::\d{1,5})?(?:[/?#\s]|$)/i },
-  { name: 'Microsoft Teams', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?teams\.(?:microsoft|live)\.com(?::\d{1,5})?(?:[/?#\s]|$)/i },
-  { name: 'Google Meet', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?meet\.google\.com(?::\d{1,5})?(?:[/?#\s]|$)/i },
+  { name: 'Zoom', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?zoom\.us(?::\d{1,5})?(?:[/?#\s]|$)/i, isAIInterviewer: false },
+  { name: 'Microsoft Teams', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?teams\.(?:microsoft|live)\.com(?::\d{1,5})?(?:[/?#\s]|$)/i, isAIInterviewer: false },
+  { name: 'Google Meet', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?meet\.google\.com(?::\d{1,5})?(?:[/?#\s]|$)/i, isAIInterviewer: false },
+  // Alex/Apriora — AI-interviewer platform, post-rebrand from a 2024 public
+  // glitch incident. `meet.alex.com` and bare `alex.com` are both real
+  // invite hosts; the optional-subdomain shape already covers both, same as
+  // the Zoom pattern above.
+  { name: 'Alex', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?alex\.com(?::\d{1,5})?(?:[/?#\s]|$)/i, isAIInterviewer: true },
+  // HireVue — AI-interviewer / on-demand video-screening platform.
+  { name: 'HireVue', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?hirevue\.com(?::\d{1,5})?(?:[/?#\s]|$)/i, isAIInterviewer: true },
 ];
 
 // A plain phone number, used only when no meeting-platform URL was found —
@@ -332,7 +345,7 @@ const PHONE_PATTERN = /(?:\+?\d{1,3}[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b/
  * above and the title/location filters in scan.mjs).
  *
  * @param {string} text - Raw pasted invite/scheduling text.
- * @returns {'Zoom'|'Microsoft Teams'|'Google Meet'|'Phone'|null}
+ * @returns {'Zoom'|'Microsoft Teams'|'Google Meet'|'Alex'|'HireVue'|'Phone'|null}
  */
 export function extractPlatform(text) {
   if (!text) return null;
@@ -341,6 +354,27 @@ export function extractPlatform(text) {
   }
   if (PHONE_PATTERN.test(text)) return 'Phone';
   return null;
+}
+
+/**
+ * Whether the call platform detected in `text` is an AI-interviewer
+ * platform (#2673) — the candidate has a live conversation with an AI
+ * system rather than a human panel (Alex/Apriora, HireVue). Deliberately a
+ * separate boolean helper rather than a change to extractPlatform()'s
+ * return contract, so existing callers (interview-prep.md's Platform field,
+ * analyzeInvite() below) keep working unmodified. Same "never guessed"
+ * discipline as extractPlatform(): pure pattern matching against the same
+ * PLATFORM_URL_PATTERNS table, false when nothing plausible is found.
+ *
+ * @param {string} text - Raw pasted invite/scheduling text.
+ * @returns {boolean}
+ */
+export function isAIInterviewerPlatform(text) {
+  if (!text) return false;
+  for (const { pattern, isAIInterviewer } of PLATFORM_URL_PATTERNS) {
+    if (isAIInterviewer && pattern.test(text)) return true;
+  }
+  return false;
 }
 
 // --- Email-type classification (#2098) ---
@@ -578,6 +612,10 @@ export function analyzeInvite(text, trackerRows = null) {
     date: extractDate(text),
     reqId: extractReqId(text),
     platform: extractPlatform(text),
+    // Additive field (#2673) — does not change the shape of any existing
+    // key above, so existing callers reading `signals.platform` etc. are
+    // unaffected.
+    isAIInterviewer: isAIInterviewerPlatform(text),
   };
   const rows = trackerRows ?? loadTracker();
   const candidates = matchInvite(signals, rows);
@@ -804,6 +842,16 @@ function runSelfTest() {
   check(extractPlatform('Join via Zoom: https://zoom.us:443/j/123456789') === 'Zoom', 'detects Zoom from a zoom.us URL with an explicit port');
   check(extractPlatform('Join Microsoft Teams Meeting: https://teams.microsoft.com:8443/l/meetup-join/xyz') === 'Microsoft Teams', 'detects Microsoft Teams from a teams.microsoft.com URL with an explicit port');
   check(extractPlatform('Google Meet: https://meet.google.com:443/abc-defg-hij') === 'Google Meet', 'detects Google Meet from a meet.google.com URL with an explicit port');
+
+  // --- AI-interviewer platforms (#2673) ---
+  check(extractPlatform('Your interview link: https://meet.alex.com/room/abc123') === 'Alex', 'detects Alex from a meet.alex.com URL');
+  check(extractPlatform('Please join at https://alex.com/i/xyz789') === 'Alex', 'detects Alex from a bare alex.com URL');
+  check(extractPlatform('Complete your on-demand interview: https://app.hirevue.com/interview/abc') === 'HireVue', 'detects HireVue from a hirevue.com URL');
+  check(isAIInterviewerPlatform('Your interview link: https://meet.alex.com/room/abc123') === true, 'isAIInterviewerPlatform is true for an Alex URL');
+  check(isAIInterviewerPlatform('Complete your on-demand interview: https://app.hirevue.com/interview/abc') === true, 'isAIInterviewerPlatform is true for a HireVue URL');
+  check(isAIInterviewerPlatform('Join via Zoom: https://us02web.zoom.us/j/1234567890') === false, 'isAIInterviewerPlatform is false for a human-mediated Zoom URL');
+  check(isAIInterviewerPlatform('We will call you at (416) 555-0199 for the screen.') === false, 'isAIInterviewerPlatform is false for a plain phone number');
+  check(isAIInterviewerPlatform('') === false, 'isAIInterviewerPlatform is false for empty text');
 
   // --- matchInvite (fixture rows, no real tracker data) ---
   const fixtureRows = [
