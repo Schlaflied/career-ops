@@ -67,6 +67,20 @@ test('checkRoleMatchExact - only a full contiguous role-title match counts', () 
   // A genuinely specific, non-generic partial word is not "exact" either —
   // checkRoleMatchExact only credits the whole role string.
   assert.equal(checkRoleMatchExact('邀请您参加python开发工程师的面试', 'PY01_python开发工程师'), false);
+  // Chinese compound titles have no separators to split on, so a "single part"
+  // Chinese role is still a whole-role match, not a bare single word.
+  assert.ok(checkRoleMatchExact('邀请您参加python开发工程师的面试', 'python开发工程师'));
+});
+
+test('checkRoleMatchExact - a single-word role, even a specific one, never counts standalone (CodeRabbit #2672)', () => {
+  // "Engineer" is not generic-recruiting vocabulary, but a single word gives a
+  // "whole role" check no more specificity than a bare-word check — it must
+  // fall through to the partial-match path and require corroboration, same as
+  // any other single significant word.
+  assert.equal(checkRoleMatchExact('We are excited to have you interview as an Engineer.', 'Engineer'), false);
+  // checkRoleMatch (the boolean convenience wrapper) still reports a match via
+  // the partial-word path; matchCandidates is what enforces corroboration.
+  assert.ok(checkRoleMatch('We are excited to have you interview as an Engineer.', 'Engineer'));
 });
 
 test('getAppDomains - drops prose tokens and filenames, keeps real hostnames', () => {
@@ -336,6 +350,39 @@ test('matchCandidates - a partial role-word match corroborated by company name s
   assert.equal(results[0].application_num, 31);
   assert.ok(results[0].signals.includes('company-name'));
   assert.ok(results[0].signals.includes('role-title'));
+  assert.equal(results[0].confidence, 'high');
+});
+
+test('matchCandidates - a partial role-word match corroborated by sender domain alone still matches (CodeRabbit #2672)', () => {
+  const apps = [
+    {
+      num: 32,
+      company: 'Fabrikam Systems',
+      role: 'PY01_Senior Backend Engineer',
+      notes: 'Recruiter contact: talent@fabrikam-careers.example'
+    }
+  ];
+
+  const candidates = [
+    {
+      message_id: 'msg10',
+      // Sender domain matches the recruiter contact domain in notes via
+      // getAppDomains. Neither "Fabrikam" nor "Fabrikam Systems" appears
+      // anywhere in the message text, so company-name matching cannot fire —
+      // the only corroboration available is the sender domain.
+      from: 'jane@fabrikam-careers.example',
+      subject: 'Backend Engineer — next steps',
+      body_snippet: 'We would like to invite you to interview.',
+      signal: 'interview_invite'
+    }
+  ];
+
+  const results = matchCandidates(candidates, apps, []);
+
+  assert.equal(results[0].application_num, 32);
+  assert.ok(results[0].signals.includes('sender-domain'));
+  assert.ok(results[0].signals.includes('role-title'));
+  assert.ok(!results[0].signals.includes('company-name'));
   assert.equal(results[0].confidence, 'high');
 });
 

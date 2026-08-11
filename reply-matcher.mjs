@@ -53,22 +53,33 @@ const GENERIC_ROLE_WORDS = new Set([
   'recruiter', 'recruiting', 'human', 'resources', 'people'
 ]);
 
-// A role title that is a single word and that word is generic recruiting
-// vocabulary (e.g. role === "Recruiter") degenerates a "whole role" substring
-// check into exactly the same bare-word check the stoplist exists to block —
-// there is no multi-word phrase for the match to be specific about.
-function isBareGenericRole(role) {
+// Matches any CJK ideograph. Chinese role titles are normally written with no
+// whitespace/underscore separators at all ("python开发工程师" is one semantic
+// phrase, not one "word"), so the single-word rule below must not treat them
+// as a bare single word the way it does for Latin-script titles.
+const CJK_RE = /[一-鿿㐀-䶿]/;
+
+// A role title that reduces to a single word — whether that word is generic
+// recruiting vocabulary ("Recruiter") or a specific one ("Engineer") — is not
+// specific enough to stand alone as an "exact" match: checking it as a whole-
+// role substring degenerates into exactly the same bare-word check the
+// corroboration requirement exists to gate. Such roles fall through to the
+// partial-match path in checkRoleMatch(), which requires company/domain
+// corroboration in matchCandidates(). Chinese compound titles are exempted:
+// they carry no separators to split on, so "single part" doesn't mean
+// "single word" for them.
+function isSingleWordRole(role) {
   const parts = role.split(/[\s_\\/()-]+/).filter(Boolean);
-  return parts.length === 1 && GENERIC_ROLE_WORDS.has(parts[0].toLowerCase());
+  return parts.length === 1 && !CJK_RE.test(parts[0]);
 }
 
 // True only when the *entire* role title (or its Chinese, symbol-stripped form)
 // appears in the text as one contiguous substring. This is specific enough to
 // stand on its own, with no need for a corroborating company/domain signal —
-// unless the role is nothing but a single generic word (see isBareGenericRole).
+// unless the role is nothing but a single word (see isSingleWordRole).
 export function checkRoleMatchExact(text, role) {
   if (!role || !text) return false;
-  if (isBareGenericRole(role)) return false;
+  if (isSingleWordRole(role)) return false;
 
   const tNorm = normalizeStr(text);
   const rNorm = normalizeStr(role);
