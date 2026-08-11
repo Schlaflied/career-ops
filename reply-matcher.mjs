@@ -43,26 +43,63 @@ export function checkCompanyMatch(text, company) {
   return false;
 }
 
-export function checkRoleMatch(text, role) {
+// Generic recruiting/HR vocabulary. These words are common enough in unrelated
+// senders' signatures, job titles, and boilerplate (e.g. "Talent Acquisition &
+// Diversity" in a recruiter's signature for a *different* company/role) that
+// they must never, by themselves, count as a "significant word" match against
+// a tracker role title — regardless of length (see #2671).
+const GENERIC_ROLE_WORDS = new Set([
+  'talent', 'acquisition', 'specialist', 'coordinator', 'operations',
+  'recruiter', 'recruiting', 'human', 'resources', 'people'
+]);
+
+// A role title that is a single word and that word is generic recruiting
+// vocabulary (e.g. role === "Recruiter") degenerates a "whole role" substring
+// check into exactly the same bare-word check the stoplist exists to block —
+// there is no multi-word phrase for the match to be specific about.
+function isBareGenericRole(role) {
+  const parts = role.split(/[\s_\\/()-]+/).filter(Boolean);
+  return parts.length === 1 && GENERIC_ROLE_WORDS.has(parts[0].toLowerCase());
+}
+
+// True only when the *entire* role title (or its Chinese, symbol-stripped form)
+// appears in the text as one contiguous substring. This is specific enough to
+// stand on its own, with no need for a corroborating company/domain signal —
+// unless the role is nothing but a single generic word (see isBareGenericRole).
+export function checkRoleMatchExact(text, role) {
   if (!role || !text) return false;
-  
+  if (isBareGenericRole(role)) return false;
+
   const tNorm = normalizeStr(text);
   const rNorm = normalizeStr(role);
   if (tNorm.includes(rNorm)) return true;
 
+  // Handle Chinese role titles ignoring symbols
+  const cleanRole = role.replace(/[\s_\\/()-]+/g, '');
+  if (cleanRole.length > 2 && tNorm.includes(cleanRole.toLowerCase())) return true;
+
+  return false;
+}
+
+export function checkRoleMatch(text, role) {
+  if (!role || !text) return false;
+
+  if (checkRoleMatchExact(text, role)) return true;
+
+  const tNorm = normalizeStr(text);
+
   // Sometimes role has extra descriptors, we check if a significant part matches
-  // Like "PY01_python开发工程师" vs "python开发工程师"
+  // Like "PY01_python开发工程师" vs "python开发工程师". Generic recruiting words
+  // (see GENERIC_ROLE_WORDS) are excluded no matter how long they are — a bare
+  // "Talent" or "Specialist" match is exactly the false-positive pattern from
+  // #2671, not evidence of a real match.
   const roleParts = role.split(/[\s_\\/()-]+/);
   for (const part of roleParts) {
-    if (part.length > 3 && tNorm.includes(normalizeStr(part))) {
+    if (part.length > 3 && !GENERIC_ROLE_WORDS.has(part.toLowerCase()) && tNorm.includes(normalizeStr(part))) {
       return true; // partial match on a significant word
     }
   }
 
-  // Handle Chinese role titles ignoring symbols
-  const cleanRole = role.replace(/[\s_\\/()-]+/g, '');
-  if (cleanRole.length > 2 && tNorm.includes(cleanRole.toLowerCase())) return true;
-  
   return false;
 }
 
@@ -181,14 +218,7 @@ export function matchCandidates(candidates, apps, followups = []) {
         signals.push('company-name');
         companyHint = app.company;
       }
-      
-      const isRoleMatch = checkRoleMatch(textContext, app.role);
-      if (isRoleMatch) {
-        score += 1.5;
-        signals.push('role-title');
-        roleHint = app.role;
-      }
-      
+
       let hasDomainMatch = false;
       if (fromDomain) {
         const appDomains = getAppDomains(app, followups);
@@ -198,6 +228,22 @@ export function matchCandidates(candidates, apps, followups = []) {
           signals.push('sender-domain');
           companyHint = companyHint || app.company;
         }
+      }
+
+      // A role match on the *entire* role title is specific enough to stand on
+      // its own. A match on just one "significant word" of the role (e.g. the
+      // role split into descriptor parts) is not — those partial matches must be
+      // corroborated by a company-name or sender-domain signal, otherwise a
+      // generic multi-word title (e.g. "Talent Acquisition Specialist") lets any
+      // unrelated email that happens to contain one of those words falsely
+      // attribute itself to this application (#2671).
+      const isRoleExactMatch = checkRoleMatchExact(textContext, app.role);
+      const isRolePartialMatch = !isRoleExactMatch && checkRoleMatch(textContext, app.role);
+      const isRoleMatch = isRoleExactMatch || (isRolePartialMatch && (isCompanyMatch || hasDomainMatch));
+      if (isRoleMatch) {
+        score += 1.5;
+        signals.push('role-title');
+        roleHint = app.role;
       }
 
       const postAppKeywords = ['interview', 'offer', 'rejection', '邀您面试', '简历通过', 'next steps', 'update on your application'];
