@@ -33,15 +33,15 @@ const USAGE = `Usage: node dedup-tracker.mjs [--dry-run]`;
 
 const cliArgs = process.argv.slice(2);
 
-if (cliArgs.includes('--help') || cliArgs.includes('-h')) {
-  console.log(USAGE);
-  process.exit(0);
-}
-
 const unknownFlags = cliArgs.filter(a => a.startsWith('-') && !KNOWN_FLAGS.includes(a));
 if (unknownFlags.length) {
   console.error(`Error: unrecognized flag(s): ${unknownFlags.join(', ')}. Valid flags: ${KNOWN_FLAGS.join(', ')}`);
   process.exit(1);
+}
+
+if (cliArgs.includes('--help') || cliArgs.includes('-h')) {
+  console.log(USAGE);
+  process.exit(0);
 }
 
 const DRY_RUN = process.argv.includes('--dry-run');

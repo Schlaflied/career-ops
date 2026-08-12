@@ -8646,6 +8646,25 @@ try {
       fail('dedup-tracker --check mutated the tracker — the #2744 bug is still live');
     }
 
+    // CodeRabbit (#2746): --help combined with an unrecognized flag must
+    // still reject — unknown-flag validation has to run before --help
+    // short-circuits, otherwise `dedup-tracker.mjs --help --check` would
+    // exit 0 instead of erroring.
+    writeFileSync(tracker, seedTracker);
+    const mixedResult = run(NODE, ['dedup-tracker.mjs', '--help', '--check'], { env });
+    const mixedFailure = lastRunFailure();
+    if (mixedResult === null && mixedFailure?.status === 1 && /unrecognized flag/i.test(mixedFailure.stderr)
+        && !/Usage:/.test(mixedFailure.stdout || '')) {
+      pass('dedup-tracker --help --check still rejects the unrecognized flag (#2746)');
+    } else {
+      fail(`dedup-tracker --help+--check should still error, not exit clean: ${formatRunFailure()}`);
+    }
+    if (readFileSync(tracker, 'utf-8') === seedTracker) {
+      pass('dedup-tracker --help --check does NOT run the live write path — tracker untouched (#2746)');
+    } else {
+      fail('dedup-tracker --help --check mutated the tracker — the #2746 ordering bug is still live');
+    }
+
     // Regression: --dry-run must still work exactly as before (previews,
     // does not write).
     writeFileSync(tracker, seedTracker);
