@@ -143,6 +143,31 @@ try {
       fail(`valueFlags negative-value case => status=${r.status} stdout=${r.stdout} stderr=${r.stderr}`);
     }
   }
+
+  {
+    // CodeRabbit (#2778): --dry-run=1 must NOT be accepted just because its
+    // base flag --dry-run is known — --dry-run isn't in valueFlags, so the
+    // `=value` form is meaningless to it, and every caller of validateFlags
+    // checks `args.includes('--dry-run')`, which is false for the string
+    // '--dry-run=1' — a silent way to run with zero dry-run protection.
+    const r = runValidate(['--dry-run=1'], ['--dry-run', '--help', '-h'], 'USAGE-TEXT');
+    if (r.status === 1 && /unrecognized flag\(s\): --dry-run=1/.test(r.stderr || '')) {
+      pass('--dry-run=1 is rejected — a boolean flag not in valueFlags may not take =value (#2778)');
+    } else {
+      fail(`--dry-run=1 case => status=${r.status} stdout=${r.stdout} stderr=${r.stderr}`);
+    }
+  }
+
+  {
+    // CodeRabbit (#2778): the equals form of a genuine value-taking flag must
+    // still be accepted, including a negative-number-shaped value.
+    const r = runValidate(['--since=-5'], ['--since', '--help', '-h'], 'USAGE-TEXT', { valueFlags: ['--since'] });
+    if (r.status === 0 && /REACHED-END/.test(r.stdout || '')) {
+      pass('--since=-5 is accepted — the equals form of a valueFlags-listed flag (#2778)');
+    } else {
+      fail(`--since=-5 case => status=${r.status} stdout=${r.stdout} stderr=${r.stderr}`);
+    }
+  }
 } catch (e) {
   fail(`cli-flags tests crashed: ${e.message}`);
 }
