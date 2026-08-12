@@ -12,10 +12,9 @@
  * Matching (see matchInterviewRow):
  *   1. Hard match — a `#N in tracker` reference in the active-interviews.md
  *      Notes column, looked up directly against applications.md's row number.
- *   2. Fallback fuzzy match — Company + Role text, using the same
- *      normalizeCompanyName/companySimilarity approach as invite-match.mjs
- *      (ported here — see the comment above normalizeCompanyName) plus
- *      role-matcher.mjs's roleFuzzyMatch (already shared with
+ *   2. Fallback fuzzy match — Company + Role text, using invite-match.mjs's
+ *      normalizeCompanyName/companySimilarity (imported directly, not
+ *      copied) plus role-matcher.mjs's roleFuzzyMatch (already shared with
  *      detect-reposts.mjs/dedup-tracker.mjs).
  *   Rows that can't be confidently paired land in their own "unmatched"
  *   bucket rather than being silently guessed.
@@ -57,10 +56,11 @@ import { readFileSync, existsSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 import { resolveColumns, parseTrackerRow } from './tracker-parse.mjs';
 import { roleFuzzyMatch } from './role-matcher.mjs';
+import { normalizeCompanyName, companySimilarity } from './invite-match.mjs';
 
 const CAREER_OPS = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_APPS_FILE = existsSync(join(CAREER_OPS, 'data/applications.md'))
@@ -215,86 +215,9 @@ export function compareLifecycle(a, b) {
 }
 
 // --- Company/role fuzzy matching ---
-// normalizeCompanyName and companySimilarity below are ported (not imported)
-// from invite-match.mjs (issue #1495 / PR #1497), which lives on a sibling
-// branch not yet merged as of this PR. The normalization approach (chained
-// legal-suffix stripping, then at most one generic-descriptor strip) and the
-// token-overlap Dice-coefficient similarity are copied verbatim so both
-// scripts collapse the same company names to the same key. If/when
-// invite-match.mjs lands on main first, this pair of functions should be
-// replaced with an import from there instead of kept in sync by hand.
-
-const LEGAL_SUFFIXES = [
-  'incorporated', 'inc', 'corporation', 'corp', 'company', 'co',
-  'limited', 'ltd', 'llc', 'llp', 'lp', 'plc',
-];
-
-const GENERIC_DESCRIPTORS = [
-  'group', 'holdings', 'technologies', 'technology', 'solutions',
-  'canada', 'international',
-];
-
-/**
- * Normalize a company name for matching. Mirrors invite-match.mjs's
- * normalizeCompanyName (see module comment above) — kept in sync by hand
- * until that module merges and can be imported directly.
- * @param {string} name
- * @returns {string}
- */
-export function normalizeCompanyName(name) {
-  let key = String(name ?? '')
-    .toLowerCase()
-    .replace(/\([^)]*\)/g, ' ')
-    .replace(/&/g, ' and ')
-    .replace(/[^a-z0-9 ]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const suffix of LEGAL_SUFFIXES) {
-      const re = new RegExp(`\\s${suffix}$`);
-      if (re.test(key)) {
-        key = key.replace(re, '').trim();
-        changed = true;
-      }
-    }
-  }
-
-  for (const word of GENERIC_DESCRIPTORS) {
-    const re = new RegExp(`\\s${word}$`);
-    if (re.test(key)) {
-      key = key.replace(re, '').trim();
-      break;
-    }
-  }
-
-  return key;
-}
-
-/**
- * Token-overlap similarity (Dice coefficient) between two already-normalized
- * company-name strings. Mirrors invite-match.mjs's companySimilarity.
- * @param {string} a
- * @param {string} b
- * @returns {number} 0..1
- */
-export function companySimilarity(a, b) {
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-
-  const tokensA = a.split(' ').filter(Boolean);
-  const tokensB = b.split(' ').filter(Boolean);
-  if (tokensA.length === 0 || tokensB.length === 0) return 0;
-
-  const [shorter, longer] = tokensA.length <= tokensB.length ? [tokensA, tokensB] : [tokensB, tokensA];
-  const longerSet = new Set(longer);
-  const overlap = shorter.filter(t => longerSet.has(t)).length;
-  if (overlap === 0) return 0;
-
-  return (2 * overlap) / (tokensA.length + tokensB.length);
-}
+// normalizeCompanyName and companySimilarity are imported directly from
+// invite-match.mjs (issue #1495 / PR #1497), which is now on main — see the
+// import at the top of this file.
 
 // A candidate needs at least this much company-name overlap (post
 // normalization) to be considered a confident fuzzy match, on top of
@@ -673,11 +596,28 @@ function runSelfTest() {
   check(compareLifecycle('interview', 'hired').comparable && compareLifecycle('interview', 'hired').cmp === -1, 'hired (states.yml-derived terminal) supersedes a non-terminal stage');
   check(!compareLifecycle('hired', 'rejected').comparable, 'hired vs. a different terminal status is ambiguous (tier 2), same as the pre-existing terminal states');
 
-  // --- normalizeCompanyName / companySimilarity (ported from invite-match.mjs) ---
+  // --- normalizeCompanyName / companySimilarity (imported from invite-match.mjs) ---
   check(normalizeCompanyName('Acme Corp.') === 'acme', 'strips "Corp." suffix');
   check(normalizeCompanyName('Acme Technologies Inc.') === 'acme', 'strips chained suffixes');
   check(companySimilarity('acme', 'acme') === 1, 'identical strings score 1');
   check(companySimilarity('acme', 'globex') === 0, 'unrelated names score 0');
+
+  // Non-ASCII company names: the old hand-copied local implementation used a
+  // Latin-only character class ([^a-z0-9 ]) that stripped every non-Latin
+  // character, collapsing names like "Яндекс" or "アクメ株式会社" to an empty
+  // string and sending matchInterviewRow() straight to unmatched. The real
+  // invite-match.mjs implementation uses \p{L}\p{M}\p{N} (any script) instead,
+  // so the normalized key survives and a same-company match succeeds.
+  check(normalizeCompanyName('Яндекс') === 'яндекс', 'non-ASCII (Cyrillic) company name survives normalization instead of collapsing to empty');
+  check(companySimilarity(normalizeCompanyName('Яндекс'), normalizeCompanyName('Яндекс')) === 1, 'identical non-ASCII company names still score a perfect match');
+  const nonAsciiEntries = [
+    { num: 401, company: 'Яндекс', role: 'Product Manager', status: 'Applied', lineNum: 1 },
+  ];
+  const nonAsciiResult = matchInterviewRow(
+    { Company: 'Яндекс', Role: 'Product Manager', Notes: '' },
+    nonAsciiEntries
+  );
+  check(nonAsciiResult.entry !== null && nonAsciiResult.entry.num === 401, 'non-ASCII company name matches via matchInterviewRow instead of falling to unmatched (regression for the hand-copied Latin-only normalizer)');
 
   // --- extractTrackerRef ---
   check(extractTrackerRef('Confirmed for Tuesday. #42 in tracker.') === 42, 'extracts "#N in tracker" reference');
