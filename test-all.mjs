@@ -8589,6 +8589,95 @@ try {
   fail(`shared role matcher / dedup safety tests crashed: ${e.message}`);
 }
 
+// ── DEDUP FLAG VALIDATION (#2744) ─────────────────────────────────────────
+// Any argv token dedup-tracker.mjs didn't recognize used to fall straight
+// through: DRY_RUN stayed false and the script ran its real, destructive
+// merge-and-write pass. `--check` (a plausible-sounding typo for --dry-run)
+// happened for real. Same shape as scan-ats-full.mjs (#1633/#1635).
+console.log('\n🧪 Testing dedup-tracker flag validation (#2744)...');
+try {
+  const flagTmp = mkdtempSync(join(tmpdir(), 'career-ops-dedup-flags-'));
+  try {
+    mkdirSync(join(flagTmp, 'data'));
+    const tracker = join(flagTmp, 'data', 'applications.md');
+    const seedTracker =
+      '# Applications Tracker\n\n' +
+      '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n' +
+      '|---|------|---------|------|-------|--------|-----|--------|-------|\n' +
+      '| 1 | 2026-01-08 | FlagCo | Engineer | 3.9/5 | Evaluated | ❌ | [1](../reports/001-flagco.md) | first row |\n' +
+      '| 1 | 2026-01-09 | FlagCo | Engineer | 4.2/5 | Evaluated | ❌ | [2](../reports/002-flagco.md) | exact duplicate |\n';
+    const env = { ...process.env, CAREER_OPS_TRACKER: tracker };
+
+    // --help / -h: print usage, exit 0, do not touch the tracker.
+    writeFileSync(tracker, seedTracker);
+    const helpResult = run(NODE, ['dedup-tracker.mjs', '--help'], { env });
+    if (helpResult !== null && /Usage:.*dedup-tracker\.mjs/.test(helpResult)) {
+      pass('dedup-tracker --help prints usage and exits 0');
+    } else {
+      fail(`dedup-tracker --help should print usage and exit 0, got: ${JSON.stringify(helpResult)}`);
+    }
+    if (readFileSync(tracker, 'utf-8') === seedTracker) {
+      pass('dedup-tracker --help does not run the dedup/write pass');
+    } else {
+      fail('dedup-tracker --help mutated the tracker — it must exit before any write path');
+    }
+
+    const hResult = run(NODE, ['dedup-tracker.mjs', '-h'], { env });
+    if (hResult !== null && /Usage:.*dedup-tracker\.mjs/.test(hResult)) {
+      pass('dedup-tracker -h prints usage and exits 0');
+    } else {
+      fail(`dedup-tracker -h should print usage and exit 0, got: ${JSON.stringify(hResult)}`);
+    }
+
+    // Unrecognized flag (the #2744 repro: --check, a plausible typo for
+    // --dry-run): must error, exit 1, and — critically — never reach the
+    // write path.
+    writeFileSync(tracker, seedTracker);
+    const checkResult = run(NODE, ['dedup-tracker.mjs', '--check'], { env });
+    const checkFailure = lastRunFailure();
+    if (checkResult === null && checkFailure?.status === 1 && /unrecognized flag/i.test(checkFailure.stderr)) {
+      pass('dedup-tracker --check (unrecognized flag) errors and exits 1 (#2744 repro)');
+    } else {
+      fail(`dedup-tracker --check should error and exit 1 with an "unrecognized flag" message: ${formatRunFailure()}`);
+    }
+    if (readFileSync(tracker, 'utf-8') === seedTracker) {
+      pass('dedup-tracker --check does NOT run the live write path — tracker untouched (#2744)');
+    } else {
+      fail('dedup-tracker --check mutated the tracker — the #2744 bug is still live');
+    }
+
+    // Regression: --dry-run must still work exactly as before (previews,
+    // does not write).
+    writeFileSync(tracker, seedTracker);
+    const dryRunResult = run(NODE, ['dedup-tracker.mjs', '--dry-run'], { env });
+    if (dryRunResult === null) {
+      fail('dedup-tracker.mjs --dry-run crashed after the flag-validation fix');
+    } else if (readFileSync(tracker, 'utf-8') === seedTracker) {
+      pass('dedup-tracker --dry-run still previews without writing (regression)');
+    } else {
+      fail('dedup-tracker --dry-run wrote to the tracker — regression');
+    }
+
+    // Regression: no-flags (real run) must still merge the exact duplicate.
+    writeFileSync(tracker, seedTracker);
+    const liveResult = run(NODE, ['dedup-tracker.mjs'], { env });
+    if (liveResult === null) {
+      fail('dedup-tracker.mjs (no flags) crashed after the flag-validation fix');
+    } else {
+      const engineerRows = readFileSync(tracker, 'utf-8').split('\n').filter(l => l.includes('| Engineer |'));
+      if (engineerRows.length === 1 && engineerRows[0].includes('4.2/5')) {
+        pass('dedup-tracker (no flags) still merges an exact duplicate live (regression)');
+      } else {
+        fail(`dedup-tracker (no flags) live-run regression: ${engineerRows.length} Engineer rows`);
+      }
+    }
+  } finally {
+    rmSync(flagTmp, { recursive: true, force: true });
+  }
+} catch (e) {
+  fail(`dedup-tracker flag validation tests crashed: ${e.message}`);
+}
+
 // ── DEDUP BLIND-VIA CHANNEL KEY: NON-LATIN AGENCIES (#2393) ──────────────
 // Unknown-employer rows (Company `?`) group by their Via channel. dedup-tracker
 // keyed that group with the file-local normalizeCompany(), which strips
