@@ -44,6 +44,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { createHash } from 'crypto';
 import * as yaml from 'js-yaml';
 
 import { parseScanHistory, detectReposts } from './detect-reposts.mjs';
@@ -54,10 +55,13 @@ import {
   parseAppliedDate,
   parseDate,
   daysBetween,
+  addDays,
   normalizeStatus,
 } from './followup-cadence.mjs';
 
 const CAREER_OPS = dirname(fileURLToPath(import.meta.url));
+const PROFILE_FILE = process.env.CAREER_OPS_PROFILE || join(CAREER_OPS, 'config/profile.yml');
+const PACKAGE_JSON = join(CAREER_OPS, 'package.json');
 
 const DEFAULT_STALE_AFTER_DAYS = 365;
 const DEFAULT_SILENCE_WINDOW_DAYS = 28;
@@ -80,7 +84,7 @@ const companyCollator = new Intl.Collator('en');
 const compareCompany = (a, b) => companyCollator.compare(String(a), String(b));
 
 // --- CLI args ---
-const KNOWN_FLAGS = ['--summary', '--self-test', '--company', '--silence-window', '--include-stale', '--scan-history', '--followups', '--help', '-h'];
+const KNOWN_FLAGS = ['--summary', '--self-test', '--company', '--silence-window', '--include-stale', '--scan-history', '--followups', '--emit-signal', '--help', '-h'];
 const VALUE_FLAGS = ['--company', '--silence-window', '--scan-history', '--followups'];
 
 const USAGE = `Usage:
@@ -90,6 +94,7 @@ const USAGE = `Usage:
   node company-history.mjs --silence-window 21    # override the default silence window (days)
   node company-history.mjs --include-stale        # include facts older than 365d in label computation
   node company-history.mjs --self-test            # run the in-memory test suite
+  node company-history.mjs --emit-signal          # also print RFC #1506 schema-v1 no-response-friction records (JSON Lines, opt-in only)
   node company-history.mjs --help                 # print this usage block and exit`;
 
 function parseArgs(argv) {
@@ -165,6 +170,7 @@ function parseArgs(argv) {
     includeStale: args.includes('--include-stale'),
     scanHistoryOverride: valueOf('--scan-history'),
     followupsOverride: valueOf('--followups'),
+    emitSignal: args.includes('--emit-signal'),
   };
 }
 
@@ -521,6 +527,171 @@ export function getCompanyCard(result, companyName) {
   };
 }
 
+// --- no-response-friction signal emission (RFC #1506 schema v1, --emit-signal only) ---
+//
+// Opt-in, local-only. Reuses the `silent-on-you` responsiveness fact
+// company-history.mjs already computes above (computeResponsiveness()) rather
+// than deriving a second silence detector: the 28-day DEFAULT_SILENCE_WINDOW_DAYS
+// (or its --silence-window override) IS this signal's threshold. RFC #1506's
+// original discussion floated a 14-day baseline before this script's 28-day
+// window shipped in #1712; per #2787 we standardize on the one window this
+// script already has tested rather than adding a second, undocumented cutoff.
+//
+// Schema v1 (verbatim from RFC #1506, ratified 2026-07-16):
+//   { companyKey, region, signalType: 'no-response-friction',
+//     severity: 'single'|'pattern'|null, sourceHash: 'sha256:...',
+//     observedAt: 'YYYY-MM', emittedBy: 'career-ops vX.Y.Z' }
+//
+// Privacy: enum/hash/date fields only — no candidate name, no free-text notes,
+// no verbatim quotes anywhere in an emitted record (same discipline as
+// interview-redflag / process-friction).
+
+// Best-effort country -> region-slug mapping for the RFC's `region` field
+// (e.g. "north-america/canada"). Deliberately small: covers the markets this
+// repo already has explicit support for (see modes/<lang>/ market sets) plus
+// a few common others. An unmapped or missing country degrades to a slug of
+// the raw country string (still useful for grouping) rather than crashing or
+// guessing a continent — 'unknown' when there is no country at all.
+const COUNTRY_REGION_MAP = {
+  canada: 'north-america/canada',
+  'united states': 'north-america/united-states',
+  'united states of america': 'north-america/united-states',
+  usa: 'north-america/united-states',
+  us: 'north-america/united-states',
+  mexico: 'north-america/mexico',
+  'united kingdom': 'europe/united-kingdom',
+  uk: 'europe/united-kingdom',
+  germany: 'europe/germany',
+  austria: 'europe/austria',
+  switzerland: 'europe/switzerland',
+  france: 'europe/france',
+  belgium: 'europe/belgium',
+  luxembourg: 'europe/luxembourg',
+  japan: 'asia/japan',
+  india: 'asia/india',
+  turkey: 'asia/turkey',
+  china: 'asia/china',
+  'saudi arabia': 'middle-east/saudi-arabia',
+  uae: 'middle-east/united-arab-emirates',
+  'united arab emirates': 'middle-east/united-arab-emirates',
+  qatar: 'middle-east/qatar',
+  australia: 'oceania/australia',
+  'new zealand': 'oceania/new-zealand',
+};
+
+function slugify(value) {
+  return String(value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+// Reads config/profile.yml -> location.country the same way followup-cadence.mjs
+// reads config/profile.yml (existsSync guard, try/catch parse, silent
+// degradation — a missing or unparsable profile must never crash signal
+// emission, it just means region is 'unknown').
+export function resolveRegion(profilePath = PROFILE_FILE) {
+  if (!profilePath || !existsSync(profilePath)) return 'unknown';
+  let raw;
+  try {
+    raw = yaml.load(readFileSync(profilePath, 'utf-8')) || {};
+  } catch {
+    return 'unknown';
+  }
+  const country = raw?.location?.country;
+  if (!country || typeof country !== 'string') return 'unknown';
+  const mapped = COUNTRY_REGION_MAP[country.trim().toLowerCase()];
+  if (mapped) return mapped;
+  const slug = slugify(country);
+  return slug ? `unmapped/${slug}` : 'unknown';
+}
+
+// package.json version -> "career-ops vX.Y.Z". Missing/unparsable package.json
+// degrades to a version-less emittedBy rather than crashing.
+export function resolveEmittedBy(packagePath = PACKAGE_JSON) {
+  try {
+    const pkg = JSON.parse(readFileSync(packagePath, 'utf-8'));
+    if (pkg && typeof pkg.version === 'string' && pkg.version) {
+      return `career-ops v${pkg.version}`;
+    }
+  } catch {
+    // fall through
+  }
+  return 'career-ops';
+}
+
+// Deterministic (not random) so repeated runs against the same underlying
+// fact produce the same sourceHash — required for downstream dedup. The
+// hashed input is already fully reconstructable from the record's own
+// plaintext fields (companyKey/observedAt/severity/signalType), so the hash
+// adds no additional linkable information beyond what those fields already
+// expose; it is opaque only in the sense that it cannot be reversed back into
+// anything MORE sensitive (raw applicant identity, notes text, etc.) than is
+// already in plaintext.
+export function computeSourceHash({ companyKey, observedAt, severity }) {
+  const raw = `no-response-friction|${companyKey}|${observedAt}|${severity ?? 'null'}`;
+  return `sha256:${createHash('sha256').update(raw).digest('hex')}`;
+}
+
+// One silent fact -> its observedAt month. Uses the date the application
+// actually CROSSED the silence window (appliedDate + silenceWindowDays), not
+// the date the script happened to run — so the same underlying fact emits the
+// same observedAt (and therefore the same sourceHash) on every run, which
+// dedup depends on. Falls back to the appliedDate itself if the arithmetic
+// ever fails to produce a parsable date.
+function silentFactObservedAt(fact, silenceWindowDays) {
+  const appliedDate = parseDate(fact.appliedDate);
+  const crossedAt = appliedDate ? addDays(appliedDate, silenceWindowDays) : null;
+  const source = crossedAt || fact.appliedDate;
+  return typeof source === 'string' && source.length >= 7 ? source.slice(0, 7) : null;
+}
+
+// Builds schema-v1 no-response-friction records for every `silent-on-you`
+// company card. Only `silent-on-you` cards ever produce a record — 'mixed'
+// (silent on some, responded on others), 'responded-before', and 'no-history'
+// cards never do, since the point of this signal is companies that have
+// NEVER answered this candidate.
+//
+// severity: 'single' for exactly one silent fact on the card, 'pattern' for
+// 2+ (the candidate applied more than once and went unanswered more than
+// once at the same company).
+export function buildNoResponseFrictionSignals(result, opts = {}) {
+  const region = opts.region ?? resolveRegion(opts.profilePath);
+  const emittedBy = opts.emittedBy ?? resolveEmittedBy(opts.packagePath);
+  const silenceWindowDays = Number.isFinite(result?.metadata?.silenceWindowDays)
+    ? result.metadata.silenceWindowDays
+    : DEFAULT_SILENCE_WINDOW_DAYS;
+
+  const records = [];
+  for (const card of Array.isArray(result?.companies) ? result.companies : []) {
+    if (card?.responsiveness?.label !== 'silent-on-you') continue;
+
+    const silentFacts = card.responsiveness.facts.filter(f => 'silentDays' in f);
+    if (silentFacts.length === 0) continue; // defensive; label implies >=1
+
+    // Most-recent silent fact anchors observedAt (largest applied num).
+    const anchorFact = silentFacts.reduce((a, b) => (b.num > a.num ? b : a));
+    const observedAt = silentFactObservedAt(anchorFact, silenceWindowDays);
+    if (!observedAt) continue; // unusable date — no record, no crash
+
+    const severity = silentFacts.length >= 2 ? 'pattern' : 'single';
+
+    records.push({
+      companyKey: card.key,
+      region,
+      signalType: 'no-response-friction',
+      severity,
+      sourceHash: computeSourceHash({ companyKey: card.key, observedAt, severity }),
+      observedAt,
+      emittedBy,
+    });
+  }
+
+  records.sort((a, b) => compareCompany(a.companyKey, b.companyKey));
+  return records;
+}
+
 // --- Summary rendering (pure) ---
 const LABEL_ORDER = { 'silent-on-you': 0, mixed: 1, 'responded-before': 2, 'no-history': 3 };
 
@@ -828,13 +999,99 @@ async function runSelfTest() {
     check(!fact.clearInstruction.includes('--note'), 'silent fact clearInstruction does not smuggle the response date into --note free text');
   }
 
+  // --- no-response-friction signal emission (RFC #1506 schema v1, #2787) ---
+  {
+    const fixedOpts = { region: 'north-america/canada', emittedBy: 'career-ops vTEST' };
+
+    // single: exactly one silent fact on the card.
+    const singleResult = buildCompanyCards(
+      { trackerRows: [row(200, 'SingleSilentCo', 'Applied', '2026-05-01')], followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+      { now: NOW, silenceWindowDays: 28 },
+    );
+    const singleSignals = buildNoResponseFrictionSignals(singleResult, fixedOpts);
+    check(singleSignals.length === 1, 'exactly one no-response-friction record emitted for a single silent-on-you card');
+    check(singleSignals[0]?.severity === 'single', 'one silent fact on the card -> severity single');
+    check(singleSignals[0]?.signalType === 'no-response-friction', 'emitted record carries signalType no-response-friction');
+    check(singleSignals[0]?.companyKey === singleResult.companies[0].key, 'emitted companyKey reuses company-history.mjs\'s own normalized key, not a new format');
+    check(singleSignals[0]?.region === 'north-america/canada', 'emitted region matches the resolved region');
+    check(singleSignals[0]?.emittedBy === 'career-ops vTEST', 'emitted emittedBy matches the resolved version string');
+    check(/^\d{4}-\d{2}$/.test(singleSignals[0]?.observedAt || ''), 'observedAt is strictly month-only (YYYY-MM, no day)');
+    check(typeof singleSignals[0]?.sourceHash === 'string' && singleSignals[0].sourceHash.startsWith('sha256:'), 'sourceHash is present and sha256-prefixed');
+
+    // pattern: two SEPARATE applications to the same company, both silent.
+    const patternResult = buildCompanyCards(
+      {
+        trackerRows: [
+          row(201, 'PatternSilentCo', 'Applied', '2026-01-01'),
+          row(202, 'PatternSilentCo', 'Applied', '2026-02-01'),
+        ],
+        followupRows: [], repostClusters: [],
+        sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false },
+      },
+      { now: NOW, silenceWindowDays: 28 },
+    );
+    check(patternResult.companies[0].responsiveness.label === 'silent-on-you', 'two-application silent fixture still labels silent-on-you (precondition for the pattern check below)');
+    const patternSignals = buildNoResponseFrictionSignals(patternResult, fixedOpts);
+    check(patternSignals.length === 1, 'still exactly one record per company card, even with 2 silent facts');
+    check(patternSignals[0]?.severity === 'pattern', 'two silent facts on the same card -> severity pattern');
+
+    // no record for responded-before / mixed / no-history cards — only
+    // silent-on-you triggers this signal.
+    const noSignalResult = buildCompanyCards(
+      {
+        trackerRows: [
+          row(210, 'RespondedNoSignalCo', 'Rejected', '2026-06-01'),
+          row(211, 'MixedNoSignalCo', 'Applied', '2026-01-01'),
+          row(212, 'MixedNoSignalCo', 'Rejected', '2026-06-20'),
+          row(213, 'NoHistoryNoSignalCo', 'Evaluated', '2026-06-01'),
+        ],
+        followupRows: [], repostClusters: [],
+        sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false },
+      },
+      { now: NOW, silenceWindowDays: 28 },
+    );
+    const labelsPresent = noSignalResult.companies.map(c => c.responsiveness.label);
+    check(labelsPresent.includes('responded-before') && labelsPresent.includes('mixed') && labelsPresent.includes('no-history'), 'no-signal fixture actually exercises responded-before, mixed, and no-history cards');
+    const noSignals = buildNoResponseFrictionSignals(noSignalResult, fixedOpts);
+    check(noSignals.length === 0, 'responded-before, mixed, and no-history cards emit zero no-response-friction records');
+
+    // running WITHOUT --emit-signal semantics: buildNoResponseFrictionSignals
+    // is only ever invoked by the CLI when the flag is passed (verified by
+    // reading the CLI wiring above); at the pure-function level, confirm the
+    // emitted records never carry free text (notes) or a candidate name —
+    // only the enum/hash/date fields in the schema.
+    const allEmitted = [...singleSignals, ...patternSignals];
+    for (const record of allEmitted) {
+      const keys = Object.keys(record).sort();
+      check(
+        JSON.stringify(keys) === JSON.stringify(['companyKey', 'emittedBy', 'observedAt', 'region', 'severity', 'signalType', 'sourceHash']),
+        'emitted record carries exactly the schema-v1 fields, nothing extra (no notes/name leakage)',
+      );
+    }
+
+    // sourceHash is deterministic (dedup-safe): rebuilding the same fixture
+    // twice must produce the same hash for the same underlying fact.
+    const singleSignalsAgain = buildNoResponseFrictionSignals(
+      buildCompanyCards(
+        { trackerRows: [row(200, 'SingleSilentCo', 'Applied', '2026-05-01')], followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+        { now: NOW, silenceWindowDays: 28 },
+      ),
+      fixedOpts,
+    );
+    check(singleSignalsAgain[0]?.sourceHash === singleSignals[0]?.sourceHash, 'sourceHash is deterministic across repeated runs against the same fact (dedup-safe)');
+
+    // resolveRegion / resolveEmittedBy degrade gracefully against a missing file.
+    check(resolveRegion(join(CAREER_OPS, '__does-not-exist__.yml')) === 'unknown', 'resolveRegion degrades to "unknown" when profile.yml is absent');
+    check(resolveEmittedBy(join(CAREER_OPS, '__does-not-exist__.json')) === 'career-ops', 'resolveEmittedBy degrades to a version-less string when package.json is unreadable');
+  }
+
   console.log(`\n  company-history self-test: ${pass} passed, ${fail} failed\n`);
   process.exit(fail > 0 ? 1 : 0);
 }
 
 // --- Run (CLI only; guarded so the module is safely importable for tests) ---
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { summaryMode, selfTestMode, company, silenceWindowArg, includeStale, scanHistoryOverride, followupsOverride } =
+  const { summaryMode, selfTestMode, company, silenceWindowArg, includeStale, scanHistoryOverride, followupsOverride, emitSignal } =
     parseArgs(process.argv);
 
   if (selfTestMode) {
@@ -873,13 +1130,22 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
       if (company) {
         console.log(JSON.stringify(getCompanyCard(result, company), null, 2));
-        return;
-      }
-
-      if (summaryMode) {
+      } else if (summaryMode) {
         console.log(renderSummary(result));
       } else {
         console.log(JSON.stringify(result, null, 2));
+      }
+
+      // --emit-signal is additive and opt-in only: without the flag, output
+      // above is byte-for-byte identical to pre-#2787 behavior. When passed,
+      // RFC #1506 schema-v1 no-response-friction records print as JSON Lines
+      // (one record per line) after the normal output — nothing is written to
+      // disk and nothing is published anywhere.
+      if (emitSignal) {
+        const signals = buildNoResponseFrictionSignals(result);
+        for (const record of signals) {
+          console.log(JSON.stringify(record));
+        }
       }
     };
 
