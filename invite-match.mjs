@@ -314,18 +314,26 @@ export function extractReqId(text) {
 // it's read separately by isAIInterviewerPlatform() below so existing
 // extractPlatform() callers are unaffected.
 //
-// This flag is only ever set `true` when the *host alone* reliably confirms
-// AI-led modality for every invite that host can appear in. That is true
-// for Alex/Apriora (a single-purpose AI-interviewer product — there is no
-// human-conducted call on that host) but NOT for HireVue: HireVue is a
-// multi-modal platform whose `hirevue.com` hosts serve on-demand recorded
-// screening, live human-conducted interviews scheduled through the
-// platform, and a separate "AI Interviewer" product, all under the same
-// domain. No public discriminator (subdomain, path) reliably distinguishes
-// which modality a given hirevue.com invite link is for, so a HireVue match
-// stays `isAIInterviewer: false` here — HireVue is still detected and named
-// by extractPlatform(), it just isn't asserted as confirmed-AI. If HireVue
-// later exposes a reliable discriminator, promote its entry then.
+// This flag is a best-effort heuristic tied to extractPlatform()'s own
+// first-match resolution, NOT a guarantee that the host is exclusively
+// AI-led: isAIInterviewerPlatform() below derives its answer from whichever
+// pattern actually wins the same ordered scan extractPlatform() runs, so the
+// two agree by construction. Alex/Apriora is flagged `true` for a clean
+// single-link Alex match, but Alex is itself multi-modal in practice — it
+// also sells a "Coordinator" product that schedules and sends calendar
+// invites for human-conducted rounds, so an alex.com link can legitimately
+// appear on an invite to a human interview (#2676 review, santifer). When a
+// human-platform link (Zoom, Teams, etc.) is also present and wins the scan,
+// the match resolves to that human platform and this flag is `false` for
+// that invite, even though alex.com appears somewhere in the text. HireVue
+// is flagged `false` unconditionally: its `hirevue.com` hosts serve
+// on-demand recorded screening, live human-conducted interviews scheduled
+// through the platform, and a separate "AI Interviewer" product, all under
+// the same domain, with no public discriminator (subdomain, path) that
+// reliably distinguishes which modality a given hirevue.com invite link is
+// for — HireVue is still detected and named by extractPlatform(), it just
+// isn't asserted as confirmed-AI. If HireVue later exposes a reliable
+// discriminator, promote its entry then.
 const PLATFORM_URL_PATTERNS = [
   { name: 'Zoom', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?zoom\.us(?::\d{1,5})?(?:[/?#\s]|$)/i, isAIInterviewer: false },
   { name: 'Microsoft Teams', pattern: /(?:^|[^\w@./?=&#-])(?:https?:\/\/)?(?:[\w-]+\.)?teams\.(?:microsoft|live)\.com(?::\d{1,5})?(?:[/?#\s]|$)/i, isAIInterviewer: false },
@@ -395,8 +403,16 @@ export function extractPlatform(text) {
  */
 export function isAIInterviewerPlatform(text) {
   if (!text) return false;
+  // Must use the SAME first-match iteration as extractPlatform() (#2676
+  // review, santifer): scanning independently for any AI-flagged pattern
+  // anywhere in the text — regardless of which platform extractPlatform()
+  // actually resolves to — let a body containing both a human-platform link
+  // (Zoom, Teams) AND an alex.com link flag as AI even though the platform
+  // that wins is the human one. Deriving from the same match means the two
+  // functions agree by construction: whichever pattern extractPlatform()
+  // would report is exactly the one whose isAIInterviewer flag decides this.
   for (const { pattern, isAIInterviewer } of PLATFORM_URL_PATTERNS) {
-    if (isAIInterviewer && pattern.test(text)) return true;
+    if (pattern.test(text)) return isAIInterviewer === true;
   }
   return false;
 }

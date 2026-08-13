@@ -161,6 +161,26 @@ eq('isAIInterviewerPlatform is false for a phone-only invite', isAIInterviewerPl
 eq('isAIInterviewerPlatform is false when nothing plausible is present', isAIInterviewerPlatform('Please confirm your availability for the interview.'), false);
 eq('isAIInterviewerPlatform is false for empty text', isAIInterviewerPlatform(''), false);
 
+// Multi-link regression (#2676 review, santifer): Alex also sells a
+// "Coordinator" product that schedules human-conducted rounds and sends the
+// calendar invite/reminder itself, so an alex.com link legitimately appears
+// alongside a human meeting-platform link. isAIInterviewerPlatform() must
+// derive its answer from the SAME first-match extractPlatform() picks, not
+// scan independently for any AI-flagged pattern anywhere in the text — a
+// Zoom (or Teams) link that wins the match must resolve the platform to the
+// human tool and keep isAIInterviewerPlatform() false, even with alex.com
+// also present in the body.
+{
+  const zoomAndAlexBody = 'Join via Zoom: https://us05web.zoom.us/j/9998887777 (reminders sent via https://alex.com/i/xyz789)';
+  eq('multi-link body (Zoom + alex.com) resolves platform to Zoom', extractPlatform(zoomAndAlexBody), 'Zoom');
+  eq('multi-link body (Zoom + alex.com) is not flagged as AI interviewer', isAIInterviewerPlatform(zoomAndAlexBody), false);
+}
+{
+  const teamsAndAlexBody = 'Join via Microsoft Teams: https://teams.microsoft.com/l/meetup-join/abc (coordinated via https://alex.com/i/xyz789)';
+  eq('multi-link body (Teams + alex.com) resolves platform to Microsoft Teams', extractPlatform(teamsAndAlexBody), 'Microsoft Teams');
+  eq('multi-link body (Teams + alex.com) is not flagged as AI interviewer', isAIInterviewerPlatform(teamsAndAlexBody), false);
+}
+
 // Lookalike hosts must not be detected as Alex/HireVue either, same
 // discipline as the existing Zoom/Teams/Meet lookalike-host guards.
 eq('lookalike host (notalex.com) is not detected as Alex', extractPlatform('Please visit https://notalex.com for details.'), null);
