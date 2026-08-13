@@ -41,10 +41,11 @@
  *      node company-history.mjs --self-test
  */
 
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createHash } from 'crypto';
+import { tmpdir } from 'os';
 import * as yaml from 'js-yaml';
 
 import { parseScanHistory, detectReposts } from './detect-reposts.mjs';
@@ -94,7 +95,13 @@ const USAGE = `Usage:
   node company-history.mjs --silence-window 21    # override the default silence window (days)
   node company-history.mjs --include-stale        # include facts older than 365d in label computation
   node company-history.mjs --self-test            # run the in-memory test suite
-  node company-history.mjs --emit-signal          # also print RFC #1506 schema-v1 no-response-friction records (JSON Lines, opt-in only)
+  node company-history.mjs --summary --emit-signal  # human-readable cards, then RFC #1506 schema-v1 no-response-friction
+                                                   # records as JSON Lines (one record per line) on stdout. --emit-signal
+                                                   # REQUIRES --summary: without it, default/--company mode already prints
+                                                   # a single parsable JSON document, and appending JSON Lines after it
+                                                   # would make stdout un-parsable as one JSON value. --summary's output is
+                                                   # not JSON to begin with, so appending JSON Lines after it stays clean —
+                                                   # bare --emit-signal (no --summary) exits 1 with this same explanation.
   node company-history.mjs --help                 # print this usage block and exit`;
 
 function parseArgs(argv) {
@@ -162,15 +169,35 @@ function parseArgs(argv) {
     process.exit(1);
   }
 
+  const summaryMode = args.includes('--summary');
+  const company = valueOf('--company');
+  const emitSignal = args.includes('--emit-signal');
+
+  // --emit-signal REQUIRES --summary (and is incompatible with --company).
+  // Default mode and --company mode both print a single parsable JSON
+  // document on stdout; appending JSON Lines signal records after that
+  // document would make stdout un-parsable as one JSON value. --summary's
+  // output is human-readable text, not JSON, so appending JSON Lines after it
+  // is the one combination that stays clean — fail fast here rather than
+  // silently corrupting a piped consumer's parse. `--company` wins over
+  // `--summary` in the output-selection branch below (see the CLI run body),
+  // so `--company --summary --emit-signal` would otherwise still print a bare
+  // JSON object followed by JSON Lines; reject that combination too.
+  if (emitSignal && (!summaryMode || company)) {
+    console.error('Error: --emit-signal requires --summary and cannot be combined with --company (default and --company mode already print a single JSON document; appending JSON Lines after it would break JSON parsing of stdout). Use: node company-history.mjs --summary --emit-signal');
+    console.error(USAGE);
+    process.exit(1);
+  }
+
   return {
-    summaryMode: args.includes('--summary'),
+    summaryMode,
     selfTestMode: args.includes('--self-test'),
-    company: valueOf('--company'),
+    company,
     silenceWindowArg,
     includeStale: args.includes('--include-stale'),
     scanHistoryOverride: valueOf('--scan-history'),
     followupsOverride: valueOf('--followups'),
-    emitSignal: args.includes('--emit-signal'),
+    emitSignal,
   };
 }
 
@@ -634,16 +661,17 @@ export function computeSourceHash({ companyKey, observedAt, severity }) {
   return `sha256:${createHash('sha256').update(raw).digest('hex')}`;
 }
 
-// One silent fact -> its observedAt month. Uses the date the application
-// actually CROSSED the silence window (appliedDate + silenceWindowDays), not
-// the date the script happened to run — so the same underlying fact emits the
-// same observedAt (and therefore the same sourceHash) on every run, which
-// dedup depends on. Falls back to the appliedDate itself if the arithmetic
-// ever fails to produce a parsable date.
-function silentFactObservedAt(fact, silenceWindowDays) {
+// One silent fact -> its observedAt month. Anchored on fact.appliedDate's own
+// month directly — deliberately NOT on appliedDate + silenceWindowDays. The
+// window is configurable (--silence-window, or resolveDefaultSilenceWindow())
+// so a window-derived observedAt would shift month (and therefore shift
+// sourceHash, see computeSourceHash above) for the SAME underlying silent
+// fact depending on what window happened to be in effect on a given run —
+// which breaks the dedup that sourceHash exists to support. appliedDate never
+// changes for a given fact, so anchoring on it keeps the hash stable.
+function silentFactObservedAt(fact) {
   const appliedDate = parseDate(fact.appliedDate);
-  const crossedAt = appliedDate ? addDays(appliedDate, silenceWindowDays) : null;
-  const source = crossedAt || fact.appliedDate;
+  const source = appliedDate ? fact.appliedDate : null;
   return typeof source === 'string' && source.length >= 7 ? source.slice(0, 7) : null;
 }
 
@@ -656,23 +684,39 @@ function silentFactObservedAt(fact, silenceWindowDays) {
 // severity: 'single' for exactly one silent fact on the card, 'pattern' for
 // 2+ (the candidate applied more than once and went unanswered more than
 // once at the same company).
+//
+// opts.includeStale mirrors the CLI's --include-stale flag: pass true to
+// count stale (>365d, or --staleAfterDays override) silent facts towards
+// severity, matching whatever includeStale value the caller used to compute
+// `result`'s labels. Left false (the default), a stale silent fact never
+// contributes to severity, keeping severity consistent with the label it
+// rode in on.
 export function buildNoResponseFrictionSignals(result, opts = {}) {
   const region = opts.region ?? resolveRegion(opts.profilePath);
   const emittedBy = opts.emittedBy ?? resolveEmittedBy(opts.packagePath);
-  const silenceWindowDays = Number.isFinite(result?.metadata?.silenceWindowDays)
-    ? result.metadata.silenceWindowDays
-    : DEFAULT_SILENCE_WINDOW_DAYS;
+  const includeStale = !!opts.includeStale;
 
   const records = [];
   for (const card of Array.isArray(result?.companies) ? result.companies : []) {
     if (card?.responsiveness?.label !== 'silent-on-you') continue;
 
-    const silentFacts = card.responsiveness.facts.filter(f => 'silentDays' in f);
+    // Mirror computeResponsiveness()'s own stale filter: the label was
+    // computed from activeFacts (stale facts excluded unless --include-stale),
+    // but card.responsiveness.facts still carries every fact, stale or not.
+    // Without this filter a card with one active + one stale silent fact
+    // would report severity 'pattern' even though only one fact actually
+    // contributed to the 'silent-on-you' label.
+    const activeFacts = includeStale ? card.responsiveness.facts : card.responsiveness.facts.filter(f => !f.stale);
+    const silentFacts = activeFacts.filter(f => 'silentDays' in f);
     if (silentFacts.length === 0) continue; // defensive; label implies >=1
 
-    // Most-recent silent fact anchors observedAt (largest applied num).
-    const anchorFact = silentFacts.reduce((a, b) => (b.num > a.num ? b : a));
-    const observedAt = silentFactObservedAt(anchorFact, silenceWindowDays);
+    // Most-recent APPLICATION anchors observedAt — compare appliedDate, not
+    // tracker row num. num is just row-insertion order; a backfilled or
+    // out-of-order row can carry a larger num with an OLDER appliedDate, which
+    // would silently anchor on a stale application despite the "most-recent"
+    // intent. ISO date strings sort correctly with plain string comparison.
+    const anchorFact = silentFacts.reduce((a, b) => (String(b.appliedDate) > String(a.appliedDate) ? b : a));
+    const observedAt = silentFactObservedAt(anchorFact);
     if (!observedAt) continue; // unusable date — no record, no crash
 
     const severity = silentFacts.length >= 2 ? 'pattern' : 'single';
@@ -1080,9 +1124,75 @@ async function runSelfTest() {
     );
     check(singleSignalsAgain[0]?.sourceHash === singleSignals[0]?.sourceHash, 'sourceHash is deterministic across repeated runs against the same fact (dedup-safe)');
 
+    // severity excludes stale facts from the count unless --include-stale is
+    // passed — a card with one active + one stale silent fact must report
+    // 'single', matching what the 'silent-on-you' label itself was computed
+    // from (computeResponsiveness excludes stale facts from the label too).
+    const staleRows = [
+      row(220, 'ActivePlusStaleCo', 'Applied', '2026-06-01'), // active: well within 365d
+      row(221, 'ActivePlusStaleCo', 'Applied', '2024-01-01'), // stale: >365d before NOW
+    ];
+    const activePlusStaleResult = buildCompanyCards(
+      { trackerRows: staleRows, followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+      { now: NOW, silenceWindowDays: 28 },
+    );
+    check(activePlusStaleResult.companies[0].responsiveness.label === 'silent-on-you', 'active+stale fixture: label is silent-on-you (only the active fact drives it)');
+    const activePlusStaleFacts = activePlusStaleResult.companies[0].responsiveness.facts;
+    check(activePlusStaleFacts.some(f => f.stale) && activePlusStaleFacts.some(f => !f.stale), 'active+stale fixture: card carries both a stale and an active silent fact');
+    const activePlusStaleSignals = buildNoResponseFrictionSignals(activePlusStaleResult, fixedOpts);
+    check(activePlusStaleSignals.length === 1, 'active+stale fixture: still exactly one record for the card');
+    check(activePlusStaleSignals[0]?.severity === 'single', 'active+stale fixture: severity is single — the stale fact does not inflate it to pattern, matching the label');
+
+    // silentFactObservedAt returning null (unusable appliedDate) must skip the
+    // card entirely — no record, no crash. Constructed directly rather than
+    // through buildCompanyCards, since computeResponsiveness() never produces
+    // a fact with an unparsable appliedDate in the first place.
+    const unusableDateResult = {
+      companies: [{
+        key: 'unusable-date-co',
+        responsiveness: {
+          label: 'silent-on-you',
+          facts: [{ num: 1, appliedDate: 'not-a-real-date', silentDays: 40, stale: false }],
+        },
+      }],
+    };
+    const unusableDateSignals = buildNoResponseFrictionSignals(unusableDateResult, fixedOpts);
+    check(unusableDateSignals.length === 0, 'a card whose anchor fact has an unusable appliedDate is skipped entirely — no record emitted');
+
+    // anchor selection compares appliedDate, not tracker row num: a lower-num
+    // row with a MORE RECENT appliedDate (a backfilled/out-of-order entry)
+    // must still win the anchor, keeping observedAt tied to the true
+    // most-recent application.
+    const outOfOrderRows = [
+      row(230, 'OutOfOrderCo', 'Applied', '2026-06-01'), // lower num, more recent applied date
+      row(231, 'OutOfOrderCo', 'Applied', '2026-01-01'), // higher num, older applied date
+    ];
+    const outOfOrderResult = buildCompanyCards(
+      { trackerRows: outOfOrderRows, followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+      { now: NOW, silenceWindowDays: 28 },
+    );
+    const outOfOrderSignals = buildNoResponseFrictionSignals(outOfOrderResult, fixedOpts);
+    check(outOfOrderSignals[0]?.observedAt === '2026-06', 'anchor fact is chosen by appliedDate (2026-06-01), not by the larger tracker row num (231, dated 2026-01-01)');
+
     // resolveRegion / resolveEmittedBy degrade gracefully against a missing file.
     check(resolveRegion(join(CAREER_OPS, '__does-not-exist__.yml')) === 'unknown', 'resolveRegion degrades to "unknown" when profile.yml is absent');
     check(resolveEmittedBy(join(CAREER_OPS, '__does-not-exist__.json')) === 'career-ops', 'resolveEmittedBy degrades to a version-less string when package.json is unreadable');
+
+    // resolveRegion: a mapped country goes through COUNTRY_REGION_MAP, and an
+    // unmapped country degrades to a slugified `unmapped/<slug>` rather than
+    // crashing or falling all the way back to 'unknown'.
+    const regionTmpDir = mkdtempSync(join(tmpdir(), 'company-history-region-test-'));
+    try {
+      const mappedProfilePath = join(regionTmpDir, 'mapped-profile.yml');
+      writeFileSync(mappedProfilePath, 'location:\n  country: Canada\n');
+      check(resolveRegion(mappedProfilePath) === 'north-america/canada', 'resolveRegion maps a known country via COUNTRY_REGION_MAP');
+
+      const unmappedProfilePath = join(regionTmpDir, 'unmapped-profile.yml');
+      writeFileSync(unmappedProfilePath, 'location:\n  country: Narnia\n');
+      check(resolveRegion(unmappedProfilePath) === 'unmapped/narnia', 'resolveRegion degrades an unmapped country to unmapped/<slug>, not "unknown"');
+    } finally {
+      rmSync(regionTmpDir, { recursive: true, force: true });
+    }
   }
 
   console.log(`\n  company-history self-test: ${pass} passed, ${fail} failed\n`);
@@ -1137,12 +1247,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       }
 
       // --emit-signal is additive and opt-in only: without the flag, output
-      // above is byte-for-byte identical to pre-#2787 behavior. When passed,
+      // above is byte-for-byte identical to pre-#2787 behavior. parseArgs()
+      // already rejects --emit-signal unless it's paired with --summary (and
+      // without --company), so by the time we get here `summaryMode` is true
+      // and the human-readable renderSummary() text — not a JSON document —
+      // is what the signal records get appended after; stdout stays a single
+      // parsable unit for whichever format was actually printed. When passed,
       // RFC #1506 schema-v1 no-response-friction records print as JSON Lines
       // (one record per line) after the normal output — nothing is written to
       // disk and nothing is published anywhere.
       if (emitSignal) {
-        const signals = buildNoResponseFrictionSignals(result);
+        const signals = buildNoResponseFrictionSignals(result, { includeStale });
         for (const record of signals) {
           console.log(JSON.stringify(record));
         }
