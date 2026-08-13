@@ -169,6 +169,21 @@ function parseArgs(argv) {
     process.exit(1);
   }
 
+  // --emit-signal is a bare boolean flag, not a value flag: the unknown-flag
+  // check above strips a `--flag=value` suffix before matching against
+  // KNOWN_FLAGS, so `--emit-signal=true` passes that check silently. But the
+  // boolean read below is an exact-token `args.includes('--emit-signal')`,
+  // which is false for `--emit-signal=true` — so the flag would be accepted
+  // as "known" yet never actually turn signal emission on. Reject any `=`
+  // form explicitly so a typo fails loudly instead of silently emitting
+  // nothing.
+  const emitSignalValue = args.find(a => a.startsWith('--emit-signal='));
+  if (emitSignalValue) {
+    console.error('Error: --emit-signal does not accept a value.');
+    console.error(USAGE);
+    process.exit(1);
+  }
+
   const summaryMode = args.includes('--summary');
   const company = valueOf('--company');
   const emitSignal = args.includes('--emit-signal');
@@ -671,7 +686,13 @@ export function computeSourceHash({ companyKey, observedAt, severity }) {
 // changes for a given fact, so anchoring on it keeps the hash stable.
 function silentFactObservedAt(fact) {
   const appliedDate = parseDate(fact.appliedDate);
-  const source = appliedDate ? fact.appliedDate : null;
+  // parseDate() tolerates surrounding whitespace when validating, but the
+  // schema's observedAt (and sourceHash, which is computed over it) must be
+  // a clean YYYY-MM slice — so trim before slicing, not just before
+  // validating, or a whitespace-padded appliedDate (e.g. ' 2026-06-01 ')
+  // would slice out the leading space plus wrong characters instead of the
+  // real year-month.
+  const source = appliedDate ? fact.appliedDate.trim() : null;
   return typeof source === 'string' && source.length >= 7 ? source.slice(0, 7) : null;
 }
 
@@ -1158,6 +1179,23 @@ async function runSelfTest() {
     };
     const unusableDateSignals = buildNoResponseFrictionSignals(unusableDateResult, fixedOpts);
     check(unusableDateSignals.length === 0, 'a card whose anchor fact has an unusable appliedDate is skipped entirely — no record emitted');
+
+    // silentFactObservedAt must trim appliedDate before slicing, not just
+    // before validating: parseDate() tolerates surrounding whitespace, but a
+    // whitespace-padded appliedDate sliced without trimming would produce a
+    // malformed observedAt (leading space, wrong characters) instead of the
+    // clean YYYY-MM the schema requires.
+    const paddedDateResult = {
+      companies: [{
+        key: 'padded-date-co',
+        responsiveness: {
+          label: 'silent-on-you',
+          facts: [{ num: 1, appliedDate: ' 2026-06-01 ', silentDays: 40, stale: false }],
+        },
+      }],
+    };
+    const paddedDateSignals = buildNoResponseFrictionSignals(paddedDateResult, fixedOpts);
+    check(paddedDateSignals[0]?.observedAt === '2026-06', 'a whitespace-padded appliedDate still produces a clean YYYY-MM observedAt');
 
     // anchor selection compares appliedDate, not tracker row num: a lower-num
     // row with a MORE RECENT appliedDate (a backfilled/out-of-order entry)
