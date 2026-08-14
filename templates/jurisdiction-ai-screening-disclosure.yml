@@ -29,13 +29,28 @@
 # cannot see. The agent states the statutory fact and the posting's own
 # silence, side by side, and stops there. Not legal advice.
 #
-# Schema per entry (key = jurisdiction code, e.g. US-NY, US-IL, EU):
+# Schema per entry (key = jurisdiction code, e.g. US-NY-NYC (city-level — no
+# existing table in this repo had a city-level precedent to follow, so this
+# table introduces {country}-{state}-{city} for city-scoped laws), US-IL, EU):
 #   jurisdiction_name: string    — human-readable name for report output
 #   law_name: string             — short name of the statute/regulation
 #   applies_to: string           — what kind of AI use triggers the obligation
 #   effective: YYYY-MM-DD        — date the disclosure obligation became mandatory
 #   requires: string             — what the law requires the employer to do
 #                                   (notice, audit, explanation, consent, etc.)
+#   job_location_condition: string — OPTIONAL, only when a law's obligations
+#                                   split by which condition triggers which
+#                                   duty (e.g. NYC LL144's bias-audit duty is
+#                                   keyed to where the JOB is based, not the
+#                                   candidate) — states that condition so it
+#                                   is never conflated with candidate_residency_condition
+#   candidate_residency_condition: string — OPTIONAL, same split as above but
+#                                   for duties keyed to where the CANDIDATE
+#                                   lives (e.g. NYC LL144's candidate-notice
+#                                   duty — the one this Block G signal
+#                                   evaluates, since the signal only knows the
+#                                   candidate's own config/profile.yml location,
+#                                   never the job's)
 #   disclosure_language_examples: list — phrases in posting/process text that
 #                                   would count as the employer having made the
 #                                   disclosure (used for agent-judged matching,
@@ -45,7 +60,9 @@
 #     what_it_shows: string      — what a candidate finds there
 #   legal_basis: string          — statute/regulation citation
 #   enforcement_notes: string    — evidence the obligation is real/enforced,
-#                                   where available
+#                                   where available; also the place to record
+#                                   the honest status of any pending/provisional
+#                                   change to the effective date (see EU row)
 #   sources: list                — citable pages/bulletins backing the row
 #   as_of: YYYY-MM-DD            — date this row was last verified against sources
 #
@@ -60,20 +77,41 @@
 #             writing; verify before adding (do not seed on a guess)
 
 jurisdictions:
-  US-NY:
-    jurisdiction_name: "New York City, USA"
+  US-NY-NYC:
+    jurisdiction_name: "New York City, USA (five boroughs)"
     law_name: "NYC Local Law 144 of 2021 (Automated Employment Decision Tools)"
     applies_to: >-
       Automated Employment Decision Tools (AEDTs) used to substantially
       assist or replace discretionary decision-making for hiring or
-      promotion of candidates for positions within New York City.
+      promotion of candidates. Local Law 144 splits its obligations across
+      TWO DIFFERENT conditions — see job_location_condition and
+      candidate_residency_condition below; they are not interchangeable.
     effective: "2023-07-05"
     requires: >-
       Employers/employment agencies using an AEDT must have it undergo a bias
-      audit within the past year, publicly post a summary of the results
-      (on their own website), and provide candidates notice that an AEDT will
-      be used, including instructions on how to request an alternative
-      selection process or accommodation, at least 10 business days before use.
+      audit within the past year and publicly post a summary of the results
+      on their own website (job_location_condition); and must give affected
+      candidates notice that an AEDT will be used at least 10 business days
+      before use, including instructions on how to request an alternative
+      selection process or accommodation (candidate_residency_condition).
+    job_location_condition: >-
+      The bias-audit-and-public-summary duty applies when the JOB is based in
+      New York City (including a remote job whose employer/office is tied to
+      an NYC address). This condition is not what this Block G signal
+      evaluates — the signal only has the candidate's own jurisdiction from
+      config/profile.yml, not the employer's office location, so it cannot
+      verify this condition and does not attempt to.
+    candidate_residency_condition: >-
+      The candidate-notice duty applies when the CANDIDATE resides in one of
+      New York City's five boroughs (Manhattan, Brooklyn, Queens, The Bronx,
+      Staten Island) — NOT New York State generally. This is the condition
+      this signal actually evaluates: it requires the candidate's own
+      config/profile.yml location to be identifiable as NYC-resident
+      specifically. A generic "New York, USA" or "New York State" location
+      string is NOT sufficient to identify five-borough residency and must
+      NOT be treated as a match for this row — Buffalo and Albany are in New
+      York State but are not NYC. Only an explicit NYC/borough-level location
+      string (e.g. "New York, NY", "Brooklyn, NY", "Queens, NY") qualifies.
     disclosure_language_examples:
       - "this process uses an automated employment decision tool"
       - "AI-powered assessment"
@@ -88,11 +126,13 @@ jurisdictions:
       DCWP is empowered to issue civil penalties for noncompliance; a
       candidate cannot verify from a posting alone whether a bias audit was
       actually performed or posted — only the employer's own public audit
-      summary answers that.
+      summary answers that. The audit-vs-notice condition split above is
+      independently confirmed by Crowell & Moring's NYC LL144 client alert
+      and Perkins Coie's summary of NYC's final AEDT rules.
     sources:
       - "NYC DCWP — Automated Employment Decision Tools (AEDT) official page"
-      - "Littler — NYC Local Law 144 compliance bulletin"
-      - "Littler — NYC Local Law 144 bias audit and notice requirements bulletin"
+      - "Crowell & Moring — NYC Local Law 144 client alert (audit vs. notice conditions)"
+      - "Perkins Coie — summary of NYC's final AEDT rules"
     as_of: "2026-08-14"
 
   US-IL:
@@ -141,7 +181,7 @@ jurisdictions:
       recruitment or selection of natural persons (e.g. targeted job ads,
       analyzing/filtering applications, evaluating candidates) or to make
       decisions affecting terms of a work-related relationship.
-    effective: "2026-08-02"
+    effective: "2027-12-02"
     requires: >-
       Deployers (employers) of a high-risk AI system in recruitment must
       inform affected candidates/workers that a high-risk AI system is
@@ -157,16 +197,24 @@ jurisdictions:
       - "automated candidate screening / ranking tool"
       - "named high-risk recruitment-AI vendor"
     official_source:
-      url: "https://artificialintelligenceact.eu/"
-      what_it_shows: "Official EU AI Act text portal (Regulation (EU) 2024/1689) — Annex III(4) high-risk employment use cases and Article 26 deployer obligations."
+      url: "https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai"
+      what_it_shows: "European Commission's official policy page for the AI Act regulatory framework, including the high-risk classification and its applicable dates."
     legal_basis: "Regulation (EU) 2024/1689 (AI Act), Annex III point 4 (employment, workers management, and access to self-employment), Article 26 (obligations of deployers of high-risk AI systems)"
     enforcement_notes: >-
-      High-risk obligations under the AI Act apply from 2 August 2026 per
-      Article 113; national market-surveillance authorities enforce per
-      member state, and enforcement maturity varies — not independently
-      verifiable from a posting.
+      Original date: the AI Act text as adopted set high-risk Annex III
+      obligations (including recruitment/employment AI) to apply from
+      2026-08-02 per Article 113. In May 2026, EU institutions reached a
+      provisional political agreement on a "Digital Omnibus" package that
+      defers high-risk obligations for stand-alone Annex III systems to
+      2027-12-02. This delay is PROVISIONAL as of this row's as_of date — it
+      takes full legal effect only once formally adopted and published in the
+      EU's Official Journal, which multiple sources expect to happen before
+      2026-08-02 (i.e. before the original date would otherwise have arrived),
+      but is not yet 100% finalized law. Re-verify against the as_of date
+      before relying on this as settled. National market-surveillance
+      authorities enforce per member state once obligations apply.
     sources:
       - "Regulation (EU) 2024/1689 — official text (EUR-Lex)"
-      - "artificialintelligenceact.eu — Annex III and Article 26 explainer"
-      - "White & Case — EU AI Act high-risk employment use case bulletin"
+      - "European Commission — AI Act regulatory framework policy page (digital-strategy.ec.europa.eu)"
+      - "Reporting on the May 2026 Digital Omnibus provisional agreement deferring stand-alone Annex III high-risk obligations to 2027-12-02"
     as_of: "2026-08-14"
