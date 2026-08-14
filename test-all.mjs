@@ -2534,6 +2534,150 @@ if (
   }
 }
 
+// --- Block G AI-screening disclosure signal (#2892, jurisdiction-compliance-lens umbrella #2026) ---
+{
+  // 1. Jurisdiction table exists, parses as YAML, and all three verified
+  //    seeds (US-NY, US-IL, EU) are complete per the header schema.
+  const asdPath = join(ROOT, 'templates', 'jurisdiction-ai-screening-disclosure.yml');
+  if (!existsSync(asdPath)) {
+    fail('templates/jurisdiction-ai-screening-disclosure.yml missing (#2892)');
+  } else {
+    try {
+      const asdRaw = readFileSync(asdPath, 'utf-8');
+      const asd = yaml.load(asdRaw);
+      const j = asd?.jurisdictions || {};
+      const rowComplete = (row) =>
+        row &&
+        typeof row.jurisdiction_name === 'string' && row.jurisdiction_name.length > 0 &&
+        typeof row.law_name === 'string' && row.law_name.length > 0 &&
+        typeof row.effective === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.effective) &&
+        typeof row.requires === 'string' && row.requires.length > 0 &&
+        Array.isArray(row.disclosure_language_examples) && row.disclosure_language_examples.length > 0 &&
+        typeof row.official_source?.url === 'string' && row.official_source.url.length > 0 &&
+        typeof row.legal_basis === 'string' && row.legal_basis.length > 0 &&
+        Array.isArray(row.sources) && row.sources.length > 0 &&
+        Boolean(row.as_of);
+
+      if (
+        rowComplete(j['US-NY']) && String(j['US-NY'].effective) === '2023-07-05' && j['US-NY'].law_name.includes('Local Law 144') &&
+        rowComplete(j['US-IL']) && j['US-IL'].law_name.includes('820 ILCS 42') &&
+        rowComplete(j['EU']) && String(j['EU'].effective) === '2026-08-02' && j['EU'].law_name.includes('2024/1689')
+      ) {
+        pass('jurisdiction-ai-screening-disclosure.yml parses and all three seeds (US-NY Local Law 144, US-IL 820 ILCS 42, EU AI Act 2024/1689) carry effective date, requires, disclosure_language_examples, official_source.url, legal_basis, sources, as_of (#2892)');
+      } else {
+        fail('jurisdiction-ai-screening-disclosure.yml seeds incomplete — needs US-NY (Local Law 144, effective 2023-07-05), US-IL (820 ILCS 42), and EU (AI Act 2024/1689, effective 2026-08-02), each with law_name, effective, requires, disclosure_language_examples, official_source.url, legal_basis, sources, as_of (#2892)');
+      }
+
+      if (
+        asdRaw.includes('CONTRIBUTION RULE') &&
+        asdRaw.includes('NEVER-ASSERT RULE') &&
+        asdRaw.includes('never a third-party mirror')
+      ) {
+        pass('jurisdiction-ai-screening-disclosure.yml header documents the contribution rule, the never-assert rule, and the official-source-only requirement (#2892)');
+      } else {
+        fail('jurisdiction-ai-screening-disclosure.yml header missing the contribution rule, never-assert rule, and/or official-source-only requirement (#2892)');
+      }
+    } catch (e) {
+      fail(`templates/jurisdiction-ai-screening-disclosure.yml does not parse as YAML: ${e.message} (#2892)`);
+    }
+  }
+
+  // 2. oferta.md carries Signal 15 with both the presence-based (a) and
+  //    corroborating-only (b) halves, the jurisdiction derivation mirroring
+  //    the agency-licensing/immigration-status pattern, and the not-legal-advice note.
+  const asdStart = ofertaMode.indexOf('**15. AI-Screening Disclosure**');
+  const asdEnd = ofertaMode.indexOf('### Output format:', Math.max(asdStart, 0));
+  const asdSection = asdStart >= 0 && asdEnd > asdStart ? ofertaMode.slice(asdStart, asdEnd) : '';
+  if (
+    asdSection &&
+    asdSection.includes('templates/jurisdiction-ai-screening-disclosure.yml') &&
+    asdSection.includes('config/profile.yml') &&
+    asdSection.includes('fires standalone') &&
+    asdSection.includes('corroborating-only') &&
+    asdSection.includes('never fires standalone') &&
+    asdSection.includes('No table row for the candidate') &&
+    asdSection.includes('not legal advice')
+  ) {
+    pass('oferta Block G Signal 15 pins the jurisdiction table reference, config/profile.yml jurisdiction derivation, presence-based standalone trigger, corroborating-only absence trigger, silent skip for no-row jurisdictions, not-legal-advice note (#2892)');
+  } else {
+    fail('oferta Block G missing/incomplete AI-screening disclosure section — needs table reference, config/profile.yml jurisdiction derivation, presence-based (a) firing standalone, absence-based (b) as corroborating-only (never standalone), silent skip for no-row jurisdictions, not-legal-advice note (#2892)');
+  }
+
+  // 3. Hard rule: never fetches or scrapes official_source.url (zero-fetch pillar)
+  if (asdSection.includes('never fetches or scrapes anything')) {
+    pass('oferta AI-screening disclosure signal pins the never-fetch/scrape hard rule (#2892)');
+  } else {
+    fail('oferta AI-screening disclosure signal missing the never-fetch/scrape hard rule (#2892)');
+  }
+
+  // 4. Phrasing discipline holds in the report-facing text: the blockquote
+  //    templates describe the statutory fact + posting silence — never an
+  //    accusation that the employer skipped a required disclosure.
+  const asdQuoteLines = asdSection.split('\n').filter((l) => l.trimStart().startsWith('>'));
+  const asdAccusatory = asdQuoteLines.filter((l) =>
+    /(this|the)\s+employer\s+(is|was|are|were|failed|did\s+not)\s+(breaking|violating|skipped|non-compliant)/i.test(l)
+  );
+  if (asdSection && asdQuoteLines.length >= 2 && asdAccusatory.length === 0) {
+    pass('AI-screening disclosure report templates state statutory fact + posting silence only — no "employer failed/violated/non-compliant" assertions (#2892)');
+  } else {
+    fail(`AI-screening disclosure phrasing discipline broken: ${asdAccusatory.length ? `accusatory blockquote line(s): ${asdAccusatory[0].trim().slice(0, 80)}` : 'expected 2+ blockquote output templates (presence + corroborating-only) in the section'} (#2892)`);
+  }
+
+  // 5. Deferred follow-up (#2676 cross-reference, #1404/#1405 analytics layer)
+  //    is explicitly noted as out of scope, not silently absorbed.
+  if (asdSection.includes('#2676') && asdSection.includes('#1404/#1405')) {
+    pass('oferta AI-screening disclosure signal explicitly defers the #2676 cross-reference and #1404/#1405 analytics-layer follow-up (#2892)');
+  } else {
+    fail('oferta AI-screening disclosure signal should explicitly note the #2676 cross-reference and #1404/#1405 analytics-layer follow-up as deferred, not attempted here (#2892)');
+  }
+
+  // 6. Risk Summary row exists and follows the "activates automatically" pattern
+  const riskSummarySection = ofertaMode.slice(
+    ofertaMode.indexOf('## Risk Summary (after Block G)'),
+    ofertaMode.indexOf('Block format:')
+  );
+  if (
+    riskSummarySection.includes('AI-screening disclosure') &&
+    riskSummarySection.includes('activates automatically once the check exists')
+  ) {
+    pass('oferta Risk Summary table carries the AI-screening disclosure row, activating automatically once the check exists (#2892)');
+  } else {
+    fail('oferta Risk Summary table missing the AI-screening disclosure row (or missing the "activates automatically" phrasing) (#2892)');
+  }
+
+  // 7. templates/README.md documents the new table
+  const templatesReadme = readFile('templates/README.md');
+  if (templatesReadme.includes('jurisdiction-ai-screening-disclosure.yml')) {
+    pass('templates/README.md documents jurisdiction-ai-screening-disclosure.yml (#2892)');
+  } else {
+    fail('templates/README.md missing an entry for jurisdiction-ai-screening-disclosure.yml (#2892)');
+  }
+
+  // 8. batch/batch-prompt.md Machine Summary schema carries the new
+  //    ai_screening_disclosure risk_summary key (source of truth for downstream parsers)
+  const batchPrompt = readFile('batch/batch-prompt.md');
+  if (batchPrompt.includes('ai_screening_disclosure:')) {
+    pass('batch/batch-prompt.md Machine Summary schema includes the ai_screening_disclosure risk_summary key (#2892)');
+  } else {
+    fail('batch/batch-prompt.md Machine Summary schema missing the ai_screening_disclosure risk_summary key (#2892)');
+  }
+
+  // 9. check-table-freshness.mjs discovers the new table automatically —
+  //    schema-agnostic discovery, no per-table registration required (#2036).
+  try {
+    const freshnessMod = await import('./check-table-freshness.mjs');
+    const asdDoc = yaml.load(asdPath && existsSync(asdPath) ? readFileSync(asdPath, 'utf-8') : '');
+    const rows = freshnessMod.extractRows(asdDoc || {});
+    if (rows.length === 3 && rows.every((r) => !r.missingAsOf)) {
+      pass('check-table-freshness.mjs extractRows() auto-discovers all 3 rows of jurisdiction-ai-screening-disclosure.yml with as_of present — no registration step needed (#2036, #2892)');
+    } else {
+      fail(`check-table-freshness.mjs extractRows() did not cleanly discover jurisdiction-ai-screening-disclosure.yml rows — got ${rows.length} rows (#2892)`);
+    }
+  } catch (e) {
+    fail(`could not import check-table-freshness.mjs to verify auto-discovery: ${e.message} (#2892)`);
+  }
+}
+
 // --- Block G pay-transparency range-width signal (#2019, re-scoped #2280) ---
 {
   // Maintainer direction (#2280): the jurisdiction table is gone — no
