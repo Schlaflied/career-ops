@@ -286,6 +286,31 @@ function extractNumbers(text) {
 }
 
 /**
+ * Map of numeric value -> array of context-word lists, one per occurrence of
+ * that number in cv.md. This scopes the `existing` bucket's number match to
+ * the same metric/context, not a bare digit-string coincidence: a story
+ * claiming "15-person team" must not count as verified just because cv.md
+ * separately says "15 years of experience" with no team/headcount language
+ * nearby (issue #2947, CodeRabbit finding — unscoped number matching).
+ * Reuses contextWords(), the same mechanism already used to scope the
+ * `supportedByResume` bucket below, instead of a second parallel heuristic.
+ * @param {string} cvText
+ * @returns {Map<number, string[][]>}
+ */
+function buildCvNumberContexts(cvText) {
+  const map = new Map();
+  const re = new RegExp(NUMBER_SCAN_RE);
+  let m;
+  while ((m = re.exec(cvText)) !== null) {
+    const value = parseFloat(m[0]);
+    const words = contextWords(cvText, m.index, m[0].length);
+    if (!map.has(value)) map.set(value, []);
+    map.get(value).push(words);
+  }
+  return map;
+}
+
+/**
  * Content words (length >= 4, not a stopword, not itself a number) in a
  * window around a claim's position — the signal used for the
  * `supportedByResume` heuristic.
@@ -313,6 +338,19 @@ function hasContextOverlap(words, cvTextLower) {
   return words.some((w) => new RegExp(`\\b${w}\\b`, 'i').test(cvTextLower));
 }
 
+/**
+ * Whether a claim's context words overlap with the context words of at
+ * least one cv.md occurrence of the same number — the scoping check that
+ * keeps the `existing` bucket from firing on a bare digit-string
+ * coincidence (see buildCvNumberContexts() above).
+ * @param {string[]} claimWords
+ * @param {string[][]} cvContextLists
+ * @returns {boolean}
+ */
+function hasScopedNumberMatch(claimWords, cvContextLists) {
+  return cvContextLists.some((cvWords) => cvWords.some((w) => claimWords.includes(w)));
+}
+
 const USER_STATED_RE = /^user-stated\s+\d{4}-\d{2}-\d{2}$/;
 
 // ── Classification ───────────────────────────────────────────────────
@@ -325,7 +363,7 @@ const USER_STATED_RE = /^user-stated\s+\d{4}-\d{2}-\d{2}$/;
  * @returns {{existing: object[], supportedByResume: object[], derivedUnverified: object[], userCannotConfirm: object[]}}
  */
 function classifyStoryBank(storyBankText, cvText) {
-  const cvNumbers = extractNumbers(cvText);
+  const cvNumberContexts = buildCvNumberContexts(cvText);
   const cvTextLower = cvText.toLowerCase();
   const stories = parseStoryBlocks(storyBankText);
 
@@ -349,27 +387,40 @@ function classifyStoryBank(storyBankText, cvText) {
         continue;
       }
 
-      const matchesCv = claim.values.every((v) => cvNumbers.has(v));
+      // Explicit user-confirmed provenance markers — checked before the
+      // numeric/context heuristics below, not as a fallback after them.
+      // Without this ordering, a story carrying `user-stated YYYY-MM-DD` or
+      // `source: cv.md` could get misclassified into `supportedByResume` (or
+      // worse) whenever the heuristic below happened to find only partial
+      // context overlap, even though the marker already asserts the claim is
+      // verified. AGENTS.md's tiering language allows either a trace to a
+      // primary file OR an explicit provenance marker to satisfy `existing`.
+      if (story.provenance && (USER_STATED_RE.test(story.provenance) || story.provenance === 'source: cv.md')) {
+        buckets.existing.push({
+          ...entry,
+          reason: `confirmed via Provenance marker (${story.provenance})`,
+        });
+        continue;
+      }
+
+      const claimWords = contextWords(story.body, claim.index, claim.text.length);
+
+      // Scoped number match: the number must appear in cv.md AND the cv.md
+      // occurrence's own context must share a term with the claim's context
+      // — a bare digit-string coincidence elsewhere in cv.md (e.g. cv.md's
+      // "15 years of experience" against a story's "15-person team") must
+      // not count as `existing`.
+      const matchesCv = claim.values.every((v) => {
+        const cvContextLists = cvNumberContexts.get(v);
+        return cvContextLists ? hasScopedNumberMatch(claimWords, cvContextLists) : false;
+      });
       if (matchesCv) {
         buckets.existing.push(entry);
         continue;
       }
 
-      const words = contextWords(story.body, claim.index, claim.text.length);
-      if (hasContextOverlap(words, cvTextLower)) {
-        buckets.supportedByResume.push({ ...entry, contextWords: words });
-        continue;
-      }
-
-      // Explicit user-confirmed figure that cv.md's prose doesn't carry at
-      // this precision. AGENTS.md's tiering language allows either a trace
-      // to a primary file OR an explicit provenance marker — this is the
-      // marker path.
-      if (story.provenance && USER_STATED_RE.test(story.provenance)) {
-        buckets.existing.push({
-          ...entry,
-          reason: `confirmed via Provenance marker (${story.provenance})`,
-        });
+      if (hasContextOverlap(claimWords, cvTextLower)) {
+        buckets.supportedByResume.push({ ...entry, contextWords: claimWords });
         continue;
       }
 
@@ -440,6 +491,14 @@ function runSelfTest() {
 ## Instructional Designer — Acme University (2022-2025)
 - Reduced onboarding ramp time from 8 hours to 2 hours per cohort by automating manual configuration steps.
 - Led a cross-functional team through a full LMS migration with zero data loss.
+
+# Filler
+
+Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua ut enim ad minim veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+
+# Summary
+
+Brings 15 years of unrelated professional background in adult education prior to instructional design work.
 `;
 
   const fakeStoryBank = `
@@ -486,6 +545,19 @@ function runSelfTest() {
     'scale-hyphen claim not in cv.md, but cv.md prose supports the fact, is supportedByResume',
     result.supportedByResume.some((c) => c.story === 'LMS Migration Team' && c.pattern === 'scale-hyphen'),
     true
+  );
+
+  // Fixture 2b (regression, CodeRabbit finding — unscoped number matching):
+  // cv.md separately contains the bare number 15 in a completely unrelated
+  // sentence ("15 years of professional experience", no team/headcount
+  // language nearby). A claim of "a 15-person team" must NOT be promoted to
+  // `existing` just because that digit string coincidentally appears
+  // elsewhere in cv.md — the match must be scoped to shared context, not a
+  // bare digit-string coincidence.
+  eq(
+    'a claim number matching cv.md only via an unrelated coincidental occurrence is NOT existing',
+    result.existing.some((c) => c.story === 'LMS Migration Team' && c.pattern === 'scale-hyphen'),
+    false
   );
 
   // Fixture 3: numeric claim only in story-bank.md, no cv.md trace, no marker -> derived-unverified
@@ -539,6 +611,55 @@ function runSelfTest() {
     'a user-stated marker promotes an otherwise-unverified claim to existing',
     userStatedResult.existing.some((c) => c.story === 'Conference Talk' && c.pattern === 'scale-noun'),
     true
+  );
+
+  // Fixture 7 (regression, CodeRabbit finding — explicit markers evaluated
+  // too late): a claim whose number is NOT in cv.md, but whose surrounding
+  // context happens to share a word with cv.md ("cohort", verbatim from
+  // fakeCv's "per cohort"), must still resolve straight to `existing` via
+  // the marker — not get redirected into `supportedByResume` by the
+  // context-overlap heuristic running first. Tested for both explicit
+  // marker forms: `user-stated YYYY-MM-DD` and the literal `source: cv.md`.
+  const userStatedOverlapBank = `
+### [Scale] Certification Program
+**Provenance:** user-stated 2026-02-01
+**Situation:** New hires needed a scalable certification path.
+**Task:** Build a training program covering core software skills.
+**Action:** Delivered training to 275 employees across each cohort rotation.
+**Result:** All participants passed the certification assessment.
+**Best for questions about:** training delivery, certification design
+`;
+  const userStatedOverlapResult = classifyStoryBank(userStatedOverlapBank, fakeCv);
+  eq(
+    'user-stated marker + overlapping cv.md context still classifies as existing, not supportedByResume',
+    userStatedOverlapResult.existing.some((c) => c.story === 'Certification Program' && c.pattern === 'scale-noun'),
+    true
+  );
+  eq(
+    'user-stated marker claim does NOT land in supportedByResume despite the context overlap',
+    userStatedOverlapResult.supportedByResume.some((c) => c.story === 'Certification Program'),
+    false
+  );
+
+  const sourceCvOverlapBank = `
+### [Scale] Certification Program
+**Provenance:** source: cv.md
+**Situation:** New hires needed a scalable certification path.
+**Task:** Build a training program covering core software skills.
+**Action:** Delivered training to 275 employees across each cohort rotation.
+**Result:** All participants passed the certification assessment.
+**Best for questions about:** training delivery, certification design
+`;
+  const sourceCvOverlapResult = classifyStoryBank(sourceCvOverlapBank, fakeCv);
+  eq(
+    'literal "source: cv.md" marker + overlapping cv.md context still classifies as existing, not supportedByResume',
+    sourceCvOverlapResult.existing.some((c) => c.story === 'Certification Program' && c.pattern === 'scale-noun'),
+    true
+  );
+  eq(
+    '"source: cv.md" marker claim does NOT land in supportedByResume despite the context overlap',
+    sourceCvOverlapResult.supportedByResume.some((c) => c.story === 'Certification Program'),
+    false
   );
 
   // diagnose() — low-confidence signaling
