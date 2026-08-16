@@ -579,10 +579,21 @@ export function getCompanyCard(result, companyName) {
 // window shipped in #1712; per #2787 we standardize on the one window this
 // script already has tested rather than adding a second, undocumented cutoff.
 //
-// Schema v1 (verbatim from RFC #1506, ratified 2026-07-16):
-//   { companyKey, region, signalType: 'no-response-friction',
-//     severity: 'single'|'pattern'|null, sourceHash: 'sha256:...',
+// Schema v1 (verbatim from RFC #1506, ratified 2026-07-16 — full 10-field
+// shape, per @Schlaflied's converged-schema comment that @santifer ratified):
+//   { schemaVersion: 1, companyKey, region, signalType: 'no-response-friction',
+//     detail: null, severity: 'single'|'pattern'|null,
+//     sourceDetector: 'no-response-friction', sourceHash: 'sha256:...',
 //     observedAt: 'YYYY-MM', emittedBy: 'career-ops vX.Y.Z' }
+//
+// `sourceDetector` enum so far: 'interview-redflag' | 'process-friction'
+// (named in the RFC thread) | 'no-response-friction' (this detector — the
+// third, established here per artemtrofymenko's PR #2788 review since the
+// RFC thread didn't pre-name it; matches the existing naming convention of
+// "sourceDetector value == signalType value" used by this signal already).
+// `detail` is null here — this signal is derived purely from tracker dates,
+// with no free text to carry (unlike e.g. process-friction's
+// "interviewer no-show, no reschedule notice" example in the RFC).
 //
 // Privacy: enum/hash/date fields only — no candidate name, no free-text notes,
 // no verbatim quotes anywhere in an emitted record (same discipline as
@@ -632,21 +643,28 @@ function slugify(value) {
 // Reads config/profile.yml -> location.country the same way followup-cadence.mjs
 // reads config/profile.yml (existsSync guard, try/catch parse, silent
 // degradation — a missing or unparsable profile must never crash signal
-// emission, it just means region is 'unknown').
+// emission). Returns null when a region genuinely cannot be resolved (no
+// profile, unparsable profile, no country field) — per artemtrofymenko's
+// review on PR #2788, a literal 'unknown' string would imply a real
+// `unknown/` shared-layer directory if this schema were ever published, so
+// callers must treat null as "skip emission, don't fabricate a region"
+// rather than emitting a misleading placeholder value. A country that IS
+// present but unmapped in COUNTRY_REGION_MAP still resolves (to
+// `unmapped/<slug>`) — that is real information, not a placeholder.
 export function resolveRegion(profilePath = PROFILE_FILE) {
-  if (!profilePath || !existsSync(profilePath)) return 'unknown';
+  if (!profilePath || !existsSync(profilePath)) return null;
   let raw;
   try {
     raw = yaml.load(readFileSync(profilePath, 'utf-8')) || {};
   } catch {
-    return 'unknown';
+    return null;
   }
   const country = raw?.location?.country;
-  if (!country || typeof country !== 'string') return 'unknown';
+  if (!country || typeof country !== 'string') return null;
   const mapped = COUNTRY_REGION_MAP[country.trim().toLowerCase()];
   if (mapped) return mapped;
   const slug = slugify(country);
-  return slug ? `unmapped/${slug}` : 'unknown';
+  return slug ? `unmapped/${slug}` : null;
 }
 
 // package.json version -> "career-ops vX.Y.Z". Missing/unparsable package.json
@@ -666,13 +684,26 @@ export function resolveEmittedBy(packagePath = PACKAGE_JSON) {
 // Deterministic (not random) so repeated runs against the same underlying
 // fact produce the same sourceHash — required for downstream dedup. The
 // hashed input is already fully reconstructable from the record's own
-// plaintext fields (companyKey/observedAt/severity/signalType), so the hash
-// adds no additional linkable information beyond what those fields already
-// expose; it is opaque only in the sense that it cannot be reversed back into
+// plaintext fields (companyKey/observedAt/signalType), so the hash adds no
+// additional linkable information beyond what those fields already expose;
+// it is opaque only in the sense that it cannot be reversed back into
 // anything MORE sensitive (raw applicant identity, notes text, etc.) than is
 // already in plaintext.
-export function computeSourceHash({ companyKey, observedAt, severity }) {
-  const raw = `no-response-friction|${companyKey}|${observedAt}|${severity ?? 'null'}`;
+//
+// `severity` is deliberately EXCLUDED from the hash (fixed per
+// artemtrofymenko's PR #2788 review, which caught this against a real
+// tracker): severity can legitimately change over time for the SAME
+// underlying company-month fact (e.g. a candidate applies once and goes
+// silent -> 'single'; applies again later and also goes silent -> 'pattern').
+// Hashing severity in would make the same companyKey+observedAt fact produce
+// a different sourceHash depending on when the record was emitted, so a
+// downstream dedup pool couldn't tell two emissions describe the same
+// evolving fact — both would coexist with contradictory severity instead of
+// the later one superseding the earlier. Keying the hash on
+// signalType|companyKey|observedAt only (what is being described, not values
+// that can accumulate) makes companyKey|observedAt the stable identity.
+export function computeSourceHash({ companyKey, observedAt }) {
+  const raw = `no-response-friction|${companyKey}|${observedAt}`;
   return `sha256:${createHash('sha256').update(raw).digest('hex')}`;
 }
 
@@ -712,14 +743,36 @@ function silentFactObservedAt(fact) {
 // `result`'s labels. Left false (the default), a stale silent fact never
 // contributes to severity, keeping severity consistent with the label it
 // rode in on.
+//
+// Returns { records, warnings } (matching this repo's established
+// discover-ats.mjs / check-table-freshness.mjs shape), not a bare array.
+// region is resolved once per run (it is a property of the candidate's own
+// profile, not of any individual company) — when it cannot be resolved,
+// per artemtrofymenko's PR #2788 review, this "says nothing" rather than
+// emitting a misleading 'unknown' literal: no records are emitted for this
+// run and a warning explains why, instead of hard-erroring the whole
+// command over one unresolvable field.
 export function buildNoResponseFrictionSignals(result, opts = {}) {
   const region = opts.region ?? resolveRegion(opts.profilePath);
   const emittedBy = opts.emittedBy ?? resolveEmittedBy(opts.packagePath);
   const includeStale = !!opts.includeStale;
 
   const records = [];
+  const warnings = [];
+
   for (const card of Array.isArray(result?.companies) ? result.companies : []) {
     if (card?.responsiveness?.label !== 'silent-on-you') continue;
+
+    // region is a property of the candidate's own profile, so it is the
+    // same (or the same absence) for every company in a given run — but the
+    // skip is expressed per-company (rather than as one early return for the
+    // whole call) so the warning names exactly which company's signal was
+    // dropped, matching the shape a future per-company region override could
+    // reuse without a rewrite here.
+    if (!region) {
+      warnings.push(`region could not be resolved from config/profile.yml — signal not emitted for ${card.key}.`);
+      continue;
+    }
 
     // Mirror computeResponsiveness()'s own stale filter: the label was
     // computed from activeFacts (stale facts excluded unless --include-stale),
@@ -743,18 +796,21 @@ export function buildNoResponseFrictionSignals(result, opts = {}) {
     const severity = silentFacts.length >= 2 ? 'pattern' : 'single';
 
     records.push({
+      schemaVersion: 1,
       companyKey: card.key,
       region,
       signalType: 'no-response-friction',
+      detail: null,
       severity,
-      sourceHash: computeSourceHash({ companyKey: card.key, observedAt, severity }),
+      sourceDetector: 'no-response-friction',
+      sourceHash: computeSourceHash({ companyKey: card.key, observedAt }),
       observedAt,
       emittedBy,
     });
   }
 
   records.sort((a, b) => compareCompany(a.companyKey, b.companyKey));
-  return records;
+  return { records, warnings };
 }
 
 // --- Summary rendering (pure) ---
@@ -1073,7 +1129,8 @@ async function runSelfTest() {
       { trackerRows: [row(200, 'SingleSilentCo', 'Applied', '2026-05-01')], followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
       { now: NOW, silenceWindowDays: 28 },
     );
-    const singleSignals = buildNoResponseFrictionSignals(singleResult, fixedOpts);
+    const { records: singleSignals, warnings: singleWarnings } = buildNoResponseFrictionSignals(singleResult, fixedOpts);
+    check(singleWarnings.length === 0, 'resolvable region: no warnings emitted');
     check(singleSignals.length === 1, 'exactly one no-response-friction record emitted for a single silent-on-you card');
     check(singleSignals[0]?.severity === 'single', 'one silent fact on the card -> severity single');
     check(singleSignals[0]?.signalType === 'no-response-friction', 'emitted record carries signalType no-response-friction');
@@ -1082,6 +1139,9 @@ async function runSelfTest() {
     check(singleSignals[0]?.emittedBy === 'career-ops vTEST', 'emitted emittedBy matches the resolved version string');
     check(/^\d{4}-\d{2}$/.test(singleSignals[0]?.observedAt || ''), 'observedAt is strictly month-only (YYYY-MM, no day)');
     check(typeof singleSignals[0]?.sourceHash === 'string' && singleSignals[0].sourceHash.startsWith('sha256:'), 'sourceHash is present and sha256-prefixed');
+    check(singleSignals[0]?.schemaVersion === 1, 'emitted record carries schemaVersion 1 (ratified RFC #1506 shape)');
+    check(singleSignals[0]?.detail === null, 'emitted record carries detail: null — this signal is derived purely from dates, no free text');
+    check(singleSignals[0]?.sourceDetector === 'no-response-friction', 'emitted record carries sourceDetector: no-response-friction');
 
     // pattern: two SEPARATE applications to the same company, both silent.
     const patternResult = buildCompanyCards(
@@ -1096,9 +1156,37 @@ async function runSelfTest() {
       { now: NOW, silenceWindowDays: 28 },
     );
     check(patternResult.companies[0].responsiveness.label === 'silent-on-you', 'two-application silent fixture still labels silent-on-you (precondition for the pattern check below)');
-    const patternSignals = buildNoResponseFrictionSignals(patternResult, fixedOpts);
+    const { records: patternSignals } = buildNoResponseFrictionSignals(patternResult, fixedOpts);
     check(patternSignals.length === 1, 'still exactly one record per company card, even with 2 silent facts');
     check(patternSignals[0]?.severity === 'pattern', 'two silent facts on the same card -> severity pattern');
+
+    // artemtrofymenko's PR #2788 review scenario, verbatim: the SAME
+    // companyKey + observedAt (same company, same month) must produce the
+    // SAME sourceHash whether the card carries 1 silent fact (severity
+    // 'single') or 2 (severity 'pattern') — severity is explicitly excluded
+    // from the hash so a later emission with updated severity supersedes
+    // the earlier one in a dedup pool instead of coexisting as a phantom
+    // duplicate.
+    const sameMonthSingleResult = buildCompanyCards(
+      { trackerRows: [row(240, 'SeverityHashCo', 'Applied', '2026-05-03')], followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+      { now: NOW, silenceWindowDays: 28 },
+    );
+    const sameMonthPatternResult = buildCompanyCards(
+      {
+        trackerRows: [
+          row(241, 'SeverityHashCo', 'Applied', '2026-05-03'),
+          row(242, 'SeverityHashCo', 'Applied', '2026-05-10'),
+        ],
+        followupRows: [], repostClusters: [],
+        sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false },
+      },
+      { now: NOW, silenceWindowDays: 28 },
+    );
+    const { records: sameMonthSingleSignals } = buildNoResponseFrictionSignals(sameMonthSingleResult, fixedOpts);
+    const { records: sameMonthPatternSignals } = buildNoResponseFrictionSignals(sameMonthPatternResult, fixedOpts);
+    check(sameMonthSingleSignals[0]?.severity === 'single' && sameMonthPatternSignals[0]?.severity === 'pattern', 'severity/hash fixture: single vs pattern severity actually differs (precondition)');
+    check(sameMonthSingleSignals[0]?.observedAt === sameMonthPatternSignals[0]?.observedAt, 'severity/hash fixture: both anchor to the same observedAt month (precondition)');
+    check(sameMonthSingleSignals[0]?.sourceHash === sameMonthPatternSignals[0]?.sourceHash, 'sourceHash is identical for the same companyKey+observedAt despite different severity (single vs pattern) — fixes the dedup-breaking bug from PR #2788 review');
 
     // no record for responded-before / mixed / no-history cards — only
     // silent-on-you triggers this signal.
@@ -1117,26 +1205,30 @@ async function runSelfTest() {
     );
     const labelsPresent = noSignalResult.companies.map(c => c.responsiveness.label);
     check(labelsPresent.includes('responded-before') && labelsPresent.includes('mixed') && labelsPresent.includes('no-history'), 'no-signal fixture actually exercises responded-before, mixed, and no-history cards');
-    const noSignals = buildNoResponseFrictionSignals(noSignalResult, fixedOpts);
+    const { records: noSignals } = buildNoResponseFrictionSignals(noSignalResult, fixedOpts);
     check(noSignals.length === 0, 'responded-before, mixed, and no-history cards emit zero no-response-friction records');
 
     // running WITHOUT --emit-signal semantics: buildNoResponseFrictionSignals
     // is only ever invoked by the CLI when the flag is passed (verified by
     // reading the CLI wiring above); at the pure-function level, confirm the
-    // emitted records never carry free text (notes) or a candidate name —
-    // only the enum/hash/date fields in the schema.
+    // emitted records carry exactly the ratified 10-field schema-v1 shape —
+    // no free text (notes), no candidate name, nothing extra, nothing
+    // missing.
     const allEmitted = [...singleSignals, ...patternSignals];
     for (const record of allEmitted) {
       const keys = Object.keys(record).sort();
       check(
-        JSON.stringify(keys) === JSON.stringify(['companyKey', 'emittedBy', 'observedAt', 'region', 'severity', 'signalType', 'sourceHash']),
-        'emitted record carries exactly the schema-v1 fields, nothing extra (no notes/name leakage)',
+        JSON.stringify(keys) === JSON.stringify([
+          'companyKey', 'detail', 'emittedBy', 'observedAt', 'region', 'schemaVersion',
+          'severity', 'signalType', 'sourceDetector', 'sourceHash',
+        ]),
+        'emitted record carries exactly the ratified schema-v1 10 fields, nothing extra (no notes/name leakage), nothing missing',
       );
     }
 
     // sourceHash is deterministic (dedup-safe): rebuilding the same fixture
     // twice must produce the same hash for the same underlying fact.
-    const singleSignalsAgain = buildNoResponseFrictionSignals(
+    const { records: singleSignalsAgain } = buildNoResponseFrictionSignals(
       buildCompanyCards(
         { trackerRows: [row(200, 'SingleSilentCo', 'Applied', '2026-05-01')], followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
         { now: NOW, silenceWindowDays: 28 },
@@ -1160,7 +1252,7 @@ async function runSelfTest() {
     check(activePlusStaleResult.companies[0].responsiveness.label === 'silent-on-you', 'active+stale fixture: label is silent-on-you (only the active fact drives it)');
     const activePlusStaleFacts = activePlusStaleResult.companies[0].responsiveness.facts;
     check(activePlusStaleFacts.some(f => f.stale) && activePlusStaleFacts.some(f => !f.stale), 'active+stale fixture: card carries both a stale and an active silent fact');
-    const activePlusStaleSignals = buildNoResponseFrictionSignals(activePlusStaleResult, fixedOpts);
+    const { records: activePlusStaleSignals } = buildNoResponseFrictionSignals(activePlusStaleResult, fixedOpts);
     check(activePlusStaleSignals.length === 1, 'active+stale fixture: still exactly one record for the card');
     check(activePlusStaleSignals[0]?.severity === 'single', 'active+stale fixture: severity is single — the stale fact does not inflate it to pattern, matching the label');
 
@@ -1177,7 +1269,7 @@ async function runSelfTest() {
         },
       }],
     };
-    const unusableDateSignals = buildNoResponseFrictionSignals(unusableDateResult, fixedOpts);
+    const { records: unusableDateSignals } = buildNoResponseFrictionSignals(unusableDateResult, fixedOpts);
     check(unusableDateSignals.length === 0, 'a card whose anchor fact has an unusable appliedDate is skipped entirely — no record emitted');
 
     // silentFactObservedAt must trim appliedDate before slicing, not just
@@ -1194,7 +1286,7 @@ async function runSelfTest() {
         },
       }],
     };
-    const paddedDateSignals = buildNoResponseFrictionSignals(paddedDateResult, fixedOpts);
+    const { records: paddedDateSignals } = buildNoResponseFrictionSignals(paddedDateResult, fixedOpts);
     check(paddedDateSignals[0]?.observedAt === '2026-06', 'a whitespace-padded appliedDate still produces a clean YYYY-MM observedAt');
 
     // anchor selection compares appliedDate, not tracker row num: a lower-num
@@ -1209,16 +1301,21 @@ async function runSelfTest() {
       { trackerRows: outOfOrderRows, followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
       { now: NOW, silenceWindowDays: 28 },
     );
-    const outOfOrderSignals = buildNoResponseFrictionSignals(outOfOrderResult, fixedOpts);
+    const { records: outOfOrderSignals } = buildNoResponseFrictionSignals(outOfOrderResult, fixedOpts);
     check(outOfOrderSignals[0]?.observedAt === '2026-06', 'anchor fact is chosen by appliedDate (2026-06-01), not by the larger tracker row num (231, dated 2026-01-01)');
 
     // resolveRegion / resolveEmittedBy degrade gracefully against a missing file.
-    check(resolveRegion(join(CAREER_OPS, '__does-not-exist__.yml')) === 'unknown', 'resolveRegion degrades to "unknown" when profile.yml is absent');
+    // Per artemtrofymenko's PR #2788 review, an unresolvable region no longer
+    // returns the literal string 'unknown' (which would imply a real
+    // `unknown/` shared-layer directory) — it returns null instead, and the
+    // caller (buildNoResponseFrictionSignals, tested below) is responsible
+    // for turning that into "skip emission + warn", not a placeholder value.
+    check(resolveRegion(join(CAREER_OPS, '__does-not-exist__.yml')) === null, 'resolveRegion degrades to null (not the string "unknown") when profile.yml is absent');
     check(resolveEmittedBy(join(CAREER_OPS, '__does-not-exist__.json')) === 'career-ops', 'resolveEmittedBy degrades to a version-less string when package.json is unreadable');
 
     // resolveRegion: a mapped country goes through COUNTRY_REGION_MAP, and an
     // unmapped country degrades to a slugified `unmapped/<slug>` rather than
-    // crashing or falling all the way back to 'unknown'.
+    // crashing or falling all the way back to null.
     const regionTmpDir = mkdtempSync(join(tmpdir(), 'company-history-region-test-'));
     try {
       const mappedProfilePath = join(regionTmpDir, 'mapped-profile.yml');
@@ -1227,7 +1324,27 @@ async function runSelfTest() {
 
       const unmappedProfilePath = join(regionTmpDir, 'unmapped-profile.yml');
       writeFileSync(unmappedProfilePath, 'location:\n  country: Narnia\n');
-      check(resolveRegion(unmappedProfilePath) === 'unmapped/narnia', 'resolveRegion degrades an unmapped country to unmapped/<slug>, not "unknown"');
+      check(resolveRegion(unmappedProfilePath) === 'unmapped/narnia', 'resolveRegion degrades an unmapped country to unmapped/<slug>, not null');
+
+      // Region-resolution-failure -> skip-emission-with-warning (Finding 3,
+      // PR #2788 review): a profile with no resolvable region must not crash
+      // the tool and must not emit a misleading 'unknown' record — it emits
+      // zero records for that run plus a warning naming the skipped company.
+      // A second company/report with a resolvable region (fixedOpts, used
+      // throughout this test block) still gets its record — proven by every
+      // other assertion in this section, which all pass a resolvable region.
+      const noRegionProfilePath = join(regionTmpDir, 'no-region-profile.yml');
+      writeFileSync(noRegionProfilePath, 'someOtherKey: true\n');
+      const noRegionResult = buildCompanyCards(
+        { trackerRows: [row(250, 'NoRegionCo', 'Applied', '2026-05-01')], followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+        { now: NOW, silenceWindowDays: 28 },
+      );
+      const { records: noRegionSignals, warnings: noRegionWarnings } = buildNoResponseFrictionSignals(
+        noRegionResult,
+        { profilePath: noRegionProfilePath, emittedBy: 'career-ops vTEST' },
+      );
+      check(noRegionSignals.length === 0, 'unresolvable region: no no-response-friction record emitted, no crash');
+      check(noRegionWarnings.length === 1 && noRegionWarnings[0].includes(noRegionResult.companies[0].key), 'unresolvable region: exactly one warning naming the skipped companyKey');
     } finally {
       rmSync(regionTmpDir, { recursive: true, force: true });
     }
@@ -1295,7 +1412,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // (one record per line) after the normal output — nothing is written to
       // disk and nothing is published anywhere.
       if (emitSignal) {
-        const signals = buildNoResponseFrictionSignals(result, { includeStale });
+        const { records: signals, warnings } = buildNoResponseFrictionSignals(result, { includeStale });
+        for (const warning of warnings) {
+          console.error(`company-history.mjs: ${warning}`);
+        }
         for (const record of signals) {
           console.log(JSON.stringify(record));
         }
