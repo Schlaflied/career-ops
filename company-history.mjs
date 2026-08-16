@@ -781,7 +781,14 @@ export function buildNoResponseFrictionSignals(result, opts = {}) {
     // would report severity 'pattern' even though only one fact actually
     // contributed to the 'silent-on-you' label.
     const activeFacts = includeStale ? card.responsiveness.facts : card.responsiveness.facts.filter(f => !f.stale);
-    const silentFacts = activeFacts.filter(f => 'silentDays' in f);
+    // A fact with an unusable appliedDate must be excluded before anchor
+    // selection and severity counting, not just skipped later when computing
+    // observedAt from the already-chosen anchor: left in, a malformed date
+    // could win the lexicographic reduce below (producing no usable
+    // observedAt at all) or, even when a valid fact wins the anchor, still
+    // inflate severity to 'pattern' despite not actually contributing a
+    // usable silent-application fact (CodeRabbit, PR #2788).
+    const silentFacts = activeFacts.filter(f => 'silentDays' in f && silentFactObservedAt(f) !== null);
     if (silentFacts.length === 0) continue; // defensive; label implies >=1
 
     // Most-recent APPLICATION anchors observedAt — compare appliedDate, not
@@ -1243,6 +1250,27 @@ async function runSelfTest() {
     );
     check(singleSignalsAgain[0]?.sourceHash === singleSignals[0]?.sourceHash, 'sourceHash is deterministic across repeated runs against the same fact (dedup-safe)');
 
+    // sourceHash must actually be sensitive to companyKey and observedAt —
+    // determinism alone doesn't prove the hash isn't a constant or doesn't
+    // silently drop one of its inputs (CodeRabbit, PR #2788).
+    const { records: differentCompanySignals } = buildNoResponseFrictionSignals(
+      buildCompanyCards(
+        { trackerRows: [row(203, 'DifferentCompanyCo', 'Applied', '2026-05-01')], followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+        { now: NOW, silenceWindowDays: 28 },
+      ),
+      fixedOpts,
+    );
+    check(differentCompanySignals[0]?.sourceHash !== singleSignals[0]?.sourceHash, 'sourceHash differs when companyKey differs (same observedAt month) — companyKey is a real hash input, not dropped');
+
+    const { records: differentMonthSignals } = buildNoResponseFrictionSignals(
+      buildCompanyCards(
+        { trackerRows: [row(204, 'SingleSilentCo', 'Applied', '2026-06-01')], followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+        { now: NOW, silenceWindowDays: 28 },
+      ),
+      fixedOpts,
+    );
+    check(differentMonthSignals[0]?.sourceHash !== singleSignals[0]?.sourceHash, 'sourceHash differs when observedAt differs (same companyKey) — observedAt is a real hash input, not dropped');
+
     // severity excludes stale facts from the count unless --include-stale is
     // passed — a card with one active + one stale silent fact must report
     // 'single', matching what the 'silent-on-you' label itself was computed
@@ -1262,6 +1290,19 @@ async function runSelfTest() {
     check(activePlusStaleSignals.length === 1, 'active+stale fixture: still exactly one record for the card');
     check(activePlusStaleSignals[0]?.severity === 'single', 'active+stale fixture: severity is single — the stale fact does not inflate it to pattern, matching the label');
 
+    // The includeStale:true emission path must actually be exercised
+    // end-to-end (not just the default-exclusion path above), so a
+    // regression in the opt-in branch would be caught (CodeRabbit, PR #2788).
+    const activePlusStaleIncludeStaleResult = buildCompanyCards(
+      { trackerRows: staleRows, followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+      { now: NOW, silenceWindowDays: 28, includeStale: true },
+    );
+    const { records: activePlusStaleIncludeStaleSignals } = buildNoResponseFrictionSignals(
+      activePlusStaleIncludeStaleResult,
+      { ...fixedOpts, includeStale: true },
+    );
+    check(activePlusStaleIncludeStaleSignals[0]?.severity === 'pattern', 'active+stale fixture with includeStale:true: severity is pattern — the stale fact now counts');
+
     // silentFactObservedAt returning null (unusable appliedDate) must skip the
     // card entirely — no record, no crash. Constructed directly rather than
     // through buildCompanyCards, since computeResponsiveness() never produces
@@ -1277,6 +1318,29 @@ async function runSelfTest() {
     };
     const { records: unusableDateSignals } = buildNoResponseFrictionSignals(unusableDateResult, fixedOpts);
     check(unusableDateSignals.length === 0, 'a card whose anchor fact has an unusable appliedDate is skipped entirely — no record emitted');
+
+    // Mixed valid/invalid facts: the unusable-date fact must be filtered out
+    // BEFORE anchor selection and severity counting, not merely tolerated by
+    // whichever fact happens to win the reduce — otherwise it could win the
+    // anchor outright, or (even when the valid fact wins) still inflate
+    // severity to 'pattern' despite contributing no usable observation
+    // (CodeRabbit, PR #2788).
+    const mixedValidityResult = {
+      companies: [{
+        key: 'mixed-validity-co',
+        responsiveness: {
+          label: 'silent-on-you',
+          facts: [
+            { num: 1, appliedDate: '2026-06-01', silentDays: 40, stale: false },
+            { num: 2, appliedDate: 'not-a-real-date', silentDays: 40, stale: false },
+          ],
+        },
+      }],
+    };
+    const { records: mixedValiditySignals } = buildNoResponseFrictionSignals(mixedValidityResult, fixedOpts);
+    check(mixedValiditySignals.length === 1, 'mixed valid/invalid facts: still exactly one record — the invalid fact does not block emission');
+    check(mixedValiditySignals[0]?.observedAt === '2026-06', 'mixed valid/invalid facts: observedAt anchors on the valid fact');
+    check(mixedValiditySignals[0]?.severity === 'single', 'mixed valid/invalid facts: severity is single — the invalid fact does not count toward pattern');
 
     // silentFactObservedAt must trim appliedDate before slicing, not just
     // before validating: parseDate() tolerates surrounding whitespace, but a
