@@ -60,6 +60,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { spawnSync } from 'child_process';
 import { parseStories } from './match-star.mjs';
 import { flagValue, hasFlag } from './lib/cli-flags.mjs';
 
@@ -582,6 +583,18 @@ function selfTest() {
   assert(parsePositiveNumberFlag('-10', '--occurrences').error !== null, 'negative rejected for --occurrences too');
   assert(parsePositiveNumberFlag('Infinity', '--occurrences').error !== null, 'Infinity rejected for --occurrences too');
 
+  // A standalone trailing --wage/--occurrences with no value must error, not
+  // silently fall through to "flag absent" (CodeRabbit follow-up, PR #2950).
+  // This lives in main()'s CLI parsing, which calls process.exit() on error,
+  // so it has to be exercised as a real subprocess rather than in-process.
+  const selfPath = fileURLToPath(import.meta.url);
+  const trailingWage = spawnSync(process.execPath, [selfPath, '--wage'], { encoding: 'utf-8' });
+  assert(trailingWage.status === 1, `trailing --wage with no value must exit 1, got ${trailingWage.status}`);
+  assert(/--wage requires a value/.test(trailingWage.stderr || ''), 'trailing --wage error message names the flag');
+  const trailingOcc = spawnSync(process.execPath, [selfPath, '--occurrences'], { encoding: 'utf-8' });
+  assert(trailingOcc.status === 1, `trailing --occurrences with no value must exit 1, got ${trailingOcc.status}`);
+  assert(/--occurrences requires a value/.test(trailingOcc.stderr || ''), 'trailing --occurrences error message names the flag');
+
   console.log('negotiation-roi self-test OK (extraction + verification gate + boundary matching + wage/frequency invariants + calculation + draft paragraph + CLI flag validation)');
 }
 
@@ -624,6 +637,28 @@ function main() {
   const args = process.argv.slice(2);
   if (args.includes('--self-test')) { selfTest(); return; }
 
+  // Argument validation runs before any filesystem/live-data requirement, so
+  // a malformed flag fails fast with a clear error rather than being masked
+  // by an unrelated "story-bank.md not found" message (also makes this path
+  // testable without needing real user-layer fixtures on disk).
+  //
+  // A standalone trailing flag (e.g. `--wage` with nothing after it) makes
+  // flagValue() return undefined — indistinguishable, on its own, from the
+  // flag never being passed at all. hasFlag() sees the bare flag either way,
+  // so hasFlag() true + flagValue() undefined means "present but missing its
+  // value", which must error rather than silently fall through to "absent"
+  // (CodeRabbit, PR #2950).
+  const wageRaw = flagValue(args, '--wage');
+  if (hasFlag(args, '--wage') && wageRaw === undefined) {
+    console.error('Error: --wage requires a value.');
+    process.exit(1);
+  }
+  const occRaw = flagValue(args, '--occurrences');
+  if (hasFlag(args, '--occurrences') && occRaw === undefined) {
+    console.error('Error: --occurrences requires a value.');
+    process.exit(1);
+  }
+
   if (!existsSync(STORY_BANK_PATH)) {
     console.error(`Error: ${STORY_BANK_PATH} not found.`);
     console.error('Run /career-ops interview-prep on a role first to populate your story bank.');
@@ -633,8 +668,6 @@ function main() {
     console.error(`Error: ${CV_PATH} not found — this is a user-layer file, create it first.`);
     process.exit(1);
   }
-
-  const wageRaw = flagValue(args, '--wage');
   const wageParsed = parsePositiveNumberFlag(wageRaw, '--wage');
   if (wageParsed.error) {
     console.error(`Error: ${wageParsed.error}`);
@@ -648,7 +681,6 @@ function main() {
     process.exit(1);
   }
 
-  const occRaw = flagValue(args, '--occurrences');
   const occParsed = parsePositiveNumberFlag(occRaw, '--occurrences');
   if (occParsed.error) {
     console.error(`Error: ${occParsed.error}`);
