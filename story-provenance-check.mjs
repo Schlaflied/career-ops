@@ -641,6 +641,22 @@ Brings 15 years of unrelated professional background in adult education prior to
     false
   );
 
+  // Control case (CodeRabbit follow-up, PR #2948): the negative assertion
+  // above passes vacuously if the context-overlap heuristic stops producing
+  // any overlap at all (e.g. a future change to the stopword list or context
+  // window), silently stopping this test from actually proving the marker
+  // wins an ordering race. Classify the identical story body with the
+  // Provenance line removed and assert it DOES land in supportedByResume —
+  // proving the heuristic really would fire here, so the marker is what's
+  // overriding it above, not an absence of overlap in the first place.
+  const noMarkerOverlapBank = userStatedOverlapBank.replace(/\*\*Provenance:\*\* user-stated 2026-02-01\n/, '');
+  const noMarkerOverlapResult = classifyStoryBank(noMarkerOverlapBank, fakeCv);
+  eq(
+    'control: the same story body WITHOUT a provenance marker lands in supportedByResume — proves the heuristic would fire absent the marker',
+    noMarkerOverlapResult.supportedByResume.some((c) => c.story === 'Certification Program'),
+    true
+  );
+
   const sourceCvOverlapBank = `
 ### [Scale] Certification Program
 **Provenance:** source: cv.md
@@ -660,6 +676,14 @@ Brings 15 years of unrelated professional background in adult education prior to
     '"source: cv.md" marker claim does NOT land in supportedByResume despite the context overlap',
     sourceCvOverlapResult.supportedByResume.some((c) => c.story === 'Certification Program'),
     false
+  );
+
+  const noMarkerOverlapBank2 = sourceCvOverlapBank.replace(/\*\*Provenance:\*\* source: cv\.md\n/, '');
+  const noMarkerOverlapResult2 = classifyStoryBank(noMarkerOverlapBank2, fakeCv);
+  eq(
+    'control: the same story body WITHOUT the "source: cv.md" marker lands in supportedByResume — proves the heuristic would fire absent the marker',
+    noMarkerOverlapResult2.supportedByResume.some((c) => c.story === 'Certification Program'),
+    true
   );
 
   // diagnose() — low-confidence signaling
