@@ -583,14 +583,27 @@ export function getCompanyCard(result, companyName) {
 // shape, per @Schlaflied's converged-schema comment that @santifer ratified):
 //   { schemaVersion: 1, companyKey, region, signalType: 'no-response-friction',
 //     detail: null, severity: 'single'|'pattern'|null,
-//     sourceDetector: 'no-response-friction', sourceHash: 'sha256:...',
+//     sourceDetector: 'company-history', sourceHash: 'sha256:...',
 //     observedAt: 'YYYY-MM', emittedBy: 'career-ops vX.Y.Z' }
 //
 // `sourceDetector` enum so far: 'interview-redflag' | 'process-friction'
-// (named in the RFC thread) | 'no-response-friction' (this detector — the
-// third, established here per artemtrofymenko's PR #2788 review since the
-// RFC thread didn't pre-name it; matches the existing naming convention of
-// "sourceDetector value == signalType value" used by this signal already).
+// (named in the RFC thread) | 'company-history' (this script — the third,
+// established here per artemtrofymenko's PR #2788 review). Originally set to
+// 'no-response-friction' (the signal name); renamed to 'company-history' per
+// a follow-up (weak-preference, non-blocking) suggestion from the same
+// reviewer: the existing precedent is interview-redflag.mjs, which emits 4
+// different signal types under the RFC's enum but always tags
+// `sourceDetector: 'interview-redflag'` — the TOOL name, not any one signal
+// name. sourceDetector identifies the producing script, not the specific
+// signal type it happened to emit. This also future-proofs the value:
+// company-history.mjs already computes two independent axes
+// (responsiveness and postingChurn); only responsiveness feeds a signal
+// today (no-response-friction), but if postingChurn ever feeds a second
+// signal type later, a value scoped to this one signal would be wrong for
+// that record — 'company-history' stays correct regardless of how many
+// signal types this script eventually produces. Renaming an enum value
+// already present in emitted records is expensive, so this was worth fixing
+// before anything shipped with the old value.
 // `detail` is null here — this signal is derived purely from tracker dates,
 // with no free text to carry (unlike e.g. process-friction's
 // "interviewer no-show, no reschedule notice" example in the RFC).
@@ -815,7 +828,7 @@ export function buildNoResponseFrictionSignals(result, opts = {}) {
       signalType: 'no-response-friction',
       detail: null,
       severity,
-      sourceDetector: 'no-response-friction',
+      sourceDetector: 'company-history',
       sourceHash: computeSourceHash({ companyKey: card.key, observedAt }),
       observedAt,
       emittedBy,
@@ -1154,7 +1167,7 @@ async function runSelfTest() {
     check(typeof singleSignals[0]?.sourceHash === 'string' && singleSignals[0].sourceHash.startsWith('sha256:'), 'sourceHash is present and sha256-prefixed');
     check(singleSignals[0]?.schemaVersion === 1, 'emitted record carries schemaVersion 1 (ratified RFC #1506 shape)');
     check(singleSignals[0]?.detail === null, 'emitted record carries detail: null — this signal is derived purely from dates, no free text');
-    check(singleSignals[0]?.sourceDetector === 'no-response-friction', 'emitted record carries sourceDetector: no-response-friction');
+    check(singleSignals[0]?.sourceDetector === 'company-history', 'emitted record carries sourceDetector: company-history (the producing tool, not the signal name — matches interview-redflag.mjs precedent)');
 
     // pattern: two SEPARATE applications to the same company, both silent.
     const patternResult = buildCompanyCards(
