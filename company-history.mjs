@@ -788,8 +788,14 @@ export function buildNoResponseFrictionSignals(result, opts = {}) {
     // tracker row num. num is just row-insertion order; a backfilled or
     // out-of-order row can carry a larger num with an OLDER appliedDate, which
     // would silently anchor on a stale application despite the "most-recent"
-    // intent. ISO date strings sort correctly with plain string comparison.
-    const anchorFact = silentFacts.reduce((a, b) => (String(b.appliedDate) > String(a.appliedDate) ? b : a));
+    // intent. ISO date strings sort correctly with plain string comparison —
+    // but only once trimmed: a whitespace-padded value (e.g. ' 2026-06-01 ')
+    // compares incorrectly against an untrimmed neighbor, which would select
+    // the wrong anchor and emit a wrong observedAt/sourceHash (CodeRabbit,
+    // PR #2788).
+    const anchorFact = silentFacts.reduce((a, b) => (
+      String(b.appliedDate).trim() > String(a.appliedDate).trim() ? b : a
+    ));
     const observedAt = silentFactObservedAt(anchorFact);
     if (!observedAt) continue; // unusable date — no record, no crash
 
@@ -1303,6 +1309,20 @@ async function runSelfTest() {
     );
     const { records: outOfOrderSignals } = buildNoResponseFrictionSignals(outOfOrderResult, fixedOpts);
     check(outOfOrderSignals[0]?.observedAt === '2026-06', 'anchor fact is chosen by appliedDate (2026-06-01), not by the larger tracker row num (231, dated 2026-01-01)');
+
+    // anchor selection must trim before comparing: an untrimmed whitespace-
+    // padded date can sort incorrectly against a clean neighbor and select
+    // the wrong (older) anchor (CodeRabbit, PR #2788).
+    const paddedAnchorRows = [
+      row(240, 'PaddedAnchorCo', 'Applied', ' 2026-06-01 '), // padded, actually most recent
+      row(241, 'PaddedAnchorCo', 'Applied', '2026-05-01'),   // clean, actually older
+    ];
+    const paddedAnchorResult = buildCompanyCards(
+      { trackerRows: paddedAnchorRows, followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+      { now: NOW, silenceWindowDays: 28 },
+    );
+    const { records: paddedAnchorSignals } = buildNoResponseFrictionSignals(paddedAnchorResult, fixedOpts);
+    check(paddedAnchorSignals[0]?.observedAt === '2026-06', 'anchor selection trims before comparing, so a whitespace-padded but more-recent appliedDate still wins over a clean but older one');
 
     // resolveRegion / resolveEmittedBy degrade gracefully against a missing file.
     // Per artemtrofymenko's PR #2788 review, an unresolvable region no longer
