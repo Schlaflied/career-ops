@@ -160,9 +160,24 @@ function numberVariants(value, unitFamily) {
   return variants;
 }
 
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Boundary-aware match: a numeric variant like "8 hours" must NOT match
+// inside "18 hours", and "60%" must NOT match inside "160%". Plain substring
+// matching (`includes`) is unbounded and lets a candidate's story-bank claim
+// "verify" against an unrelated, larger number in cv.md — the exact
+// fabrication-into-negotiation gap this gate exists to close. A negative
+// lookbehind/lookahead for an adjacent digit (or decimal point) rules that
+// out while still matching the variant anywhere else in the text.
 function anyVariantInText(variants, text) {
   const hay = text.toLowerCase();
-  return variants.some((v) => hay.includes(v.toLowerCase()));
+  return variants.some((v) => {
+    const escaped = escapeRegExp(v.toLowerCase());
+    const re = new RegExp(`(?<![\\d.])${escaped}(?![\\d.])`, 'i');
+    return re.test(hay);
+  });
 }
 
 /**
@@ -258,6 +273,25 @@ export function computeCalculation(claim, storyText, opts) {
     },
     reason: null,
   };
+}
+
+/**
+ * Parse a CLI flag that must be a positive, finite number (e.g. --wage,
+ * --occurrences). `Number()` rejects trailing garbage like "40usd" (returns
+ * NaN for the whole string, unlike `parseFloat()` which would silently parse
+ * a leading numeric prefix); combined with the finite/positive check this
+ * also rejects negative values, zero, and Infinity/-Infinity.
+ * @param {string|undefined} raw
+ * @param {string} label - flag name for the error message, e.g. "--wage"
+ * @returns {{ value: number|null, error: string|null }}
+ */
+export function parsePositiveNumberFlag(raw, label) {
+  if (raw === undefined) return { value: null, error: null };
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    return { value: null, error: `${label} must be a positive finite number, got "${raw}"` };
+  }
+  return { value, error: null };
 }
 
 /**
@@ -455,6 +489,27 @@ function selfTest() {
   const verifiedFail = verifyClaim({ type: 'time-reduction', before: { value: 15 }, after: { value: 3 } }, CV_FIXTURE);
   assert(verifiedFail.verified === false, '15h/3h NOT in cv.md fixture -> excluded');
 
+  // Boundary-aware matching (CodeRabbit finding #1 on PR #2950): a claim of
+  // "8 hours" must NOT verify against cv.md text that only contains
+  // "18 hours" (unbounded substring match would incorrectly say it does).
+  // Same for "60%" not matching inside "160%".
+  const boundaryHourFail = verifyClaim(
+    { type: 'time-reduction', before: { value: 8 }, after: { value: 2 } },
+    'The old process took 18 hours and now takes 12 hours.'
+  );
+  assert(boundaryHourFail.verified === false, '"8 hours" must not verify inside "18 hours" (substring collision)');
+  const boundaryPercentFail = verifyClaim(
+    { type: 'percent-reduction', percent: 60 },
+    'Throughput improved by 160% last quarter.'
+  );
+  assert(boundaryPercentFail.verified === false, '"60%" must not verify inside "160%" (substring collision)');
+  // Sanity: the same variants DO verify when genuinely present with a boundary.
+  const boundaryHourOk = verifyClaim(
+    { type: 'time-reduction', before: { value: 8 }, after: { value: 2 } },
+    'Cut the process from 8 hours to 2 hours.'
+  );
+  assert(boundaryHourOk.verified === true, '"8 hours" still verifies against genuine "8 hours" text');
+
   // resolveFrequency / resolveWage — never guess
   assert(resolveFrequency('no frequency mentioned here', {}) === null, 'no frequency source -> null, not guessed');
   assert(resolveFrequency('this happens weekly', {}).occurrencesPerYear === 52, 'frequency read from story text');
@@ -513,7 +568,21 @@ function selfTest() {
   assert(result3.calculable.length === 0, 'zero calculable claims with no wage basis anywhere');
   assert(result3.uncalculable.every(u => u.claimType !== 'time-reduction' || /wage/.test(u.reason)), 'every time-reduction claim blocked on missing wage, not silently defaulted');
 
-  console.log('negotiation-roi self-test OK (extraction + verification gate + wage/frequency invariants + calculation + draft paragraph)');
+  // parsePositiveNumberFlag (CodeRabbit finding #2 on PR #2950): malformed,
+  // negative, zero, and non-finite CLI values must be rejected, not silently
+  // truncated to a leading numeric prefix.
+  assert(parsePositiveNumberFlag(undefined, '--wage').error === null, 'flag not passed -> no error, value null');
+  assert(parsePositiveNumberFlag(undefined, '--wage').value === null, 'flag not passed -> value null');
+  assert(parsePositiveNumberFlag('40', '--wage').value === 40, 'valid numeric string parses');
+  assert(parsePositiveNumberFlag('40usd', '--wage').error !== null, '"40usd" rejected, not silently parsed as 40');
+  assert(parsePositiveNumberFlag('-10', '--wage').error !== null, 'negative value rejected');
+  assert(parsePositiveNumberFlag('Infinity', '--wage').error !== null, 'Infinity rejected');
+  assert(parsePositiveNumberFlag('0', '--wage').error !== null, 'zero rejected');
+  assert(parsePositiveNumberFlag('40usd', '--occurrences').error !== null, '"40usd" rejected for --occurrences too');
+  assert(parsePositiveNumberFlag('-10', '--occurrences').error !== null, 'negative rejected for --occurrences too');
+  assert(parsePositiveNumberFlag('Infinity', '--occurrences').error !== null, 'Infinity rejected for --occurrences too');
+
+  console.log('negotiation-roi self-test OK (extraction + verification gate + boundary matching + wage/frequency invariants + calculation + draft paragraph + CLI flag validation)');
 }
 
 // ── CLI ────────────────────────────────────────────────────────────────
@@ -566,11 +635,12 @@ function main() {
   }
 
   const wageRaw = flagValue(args, '--wage');
-  const wage = wageRaw !== undefined ? parseFloat(wageRaw) : null;
-  if (wageRaw !== undefined && Number.isNaN(wage)) {
-    console.error(`Error: --wage must be a number, got "${wageRaw}"`);
+  const wageParsed = parsePositiveNumberFlag(wageRaw, '--wage');
+  if (wageParsed.error) {
+    console.error(`Error: ${wageParsed.error}`);
     process.exit(1);
   }
+  const wage = wageParsed.value;
 
   const frequency = flagValue(args, '--frequency') ?? null;
   if (frequency && !Object.hasOwn(FREQUENCY_MAP, frequency)) {
@@ -579,11 +649,12 @@ function main() {
   }
 
   const occRaw = flagValue(args, '--occurrences');
-  const occurrencesPerYear = occRaw !== undefined ? parseFloat(occRaw) : null;
-  if (occRaw !== undefined && Number.isNaN(occurrencesPerYear)) {
-    console.error(`Error: --occurrences must be a number, got "${occRaw}"`);
+  const occParsed = parsePositiveNumberFlag(occRaw, '--occurrences');
+  if (occParsed.error) {
+    console.error(`Error: ${occParsed.error}`);
     process.exit(1);
   }
+  const occurrencesPerYear = occParsed.value;
 
   const storyBankText = readFileSync(STORY_BANK_PATH, 'utf-8');
   const cvText = readFileSync(CV_PATH, 'utf-8');
