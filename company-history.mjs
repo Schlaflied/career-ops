@@ -392,6 +392,14 @@ export function computeResponsiveness(rows, followupCountsByAppNum, opts = {}) {
         followupsSent,
         confidence: followupsSent >= 1 ? 'confirmed-by-followups' : 'unconfirmed',
         stale: silentDays > staleAfterDays,
+        // Carried through so buildNoResponseFrictionSignals() can derive
+        // postingChannel (#3010) from the anchor fact without a second join
+        // back to the tracker row — row.via is the tracker's own tagged
+        // via={Agency} field (AGENTS.md's "Optional Via field", #1596), or
+        // its em-dash "confirmed direct" convention. Never fabricated here:
+        // absent/undefined stays null, exactly like resolveRegion()'s null
+        // for "no data", not a guessed value.
+        via: row.via ?? null,
         dateBasis,
         // Real set-status.mjs syntax (it rejects unknown flags, so the
         // instruction must only use flags that exist): --on records the real
@@ -611,6 +619,19 @@ export function getCompanyCard(result, companyName) {
 // Privacy: enum/hash/date fields only — no candidate name, no free-text notes,
 // no verbatim quotes anywhere in an emitted record (same discipline as
 // interview-redflag / process-friction).
+//
+// ADDITIVE field, not part of the ratified v1 shape above: `postingChannel`
+// ('direct-employer' | 'staffing-agency' | 'unknown'), proposed in #3010 and
+// pending its own review — kept separate from the RFC-ratified 10 fields
+// because it has not itself been ratified. Per @strelov1's (freehire.me)
+// production measurement cited in #3010, a single-criterion structural
+// signal like this one systematically misfires on staffing/recruiting
+// agencies, which legitimately post client roles that never appear on their
+// own careers page — conflating "agency-mediated posting" with "shady
+// posting". No new detection: it wires in the tracker's own existing tagged
+// `via={Agency}` field (#1596) via resolvePostingChannel() below, the same
+// "never fabricate, degrade to unknown" discipline resolveRegion() already
+// uses for the `region` field above.
 
 // Best-effort country -> region-slug mapping for the RFC's `region` field
 // (e.g. "north-america/canada"). Deliberately small: covers the markets this
@@ -678,6 +699,26 @@ export function resolveRegion(profilePath = PROFILE_FILE) {
   if (mapped) return mapped;
   const slug = slugify(country);
   return slug ? `unmapped/${slug}` : null;
+}
+
+// Distinguishes who actually posted the role — the direct employer, or a
+// third-party staffing/recruiting agency filling a client req — for the
+// additive `postingChannel` field (#3010; see the schema comment block
+// above). Reuses the tracker's own existing `via` convention (AGENTS.md's
+// "Optional Via field", #1596) rather than adding new detection: a non-empty
+// tagged value that isn't the em-dash sentinel means agency-mediated; the
+// tracker's own em-dash convention means confirmed-direct; and — matching
+// resolveRegion()'s "never fabricate, degrade to a real absence" discipline
+// — an undefined, null, or blank/whitespace-only `via` means no data was
+// ever recorded either way, so this returns 'unknown' rather than guessing
+// 'direct-employer'. `unknown` here is a real, RFC-sanctioned enum value
+// (unlike resolveRegion()'s rejected 'unknown' literal), so no null-vs-string
+// caller-side handling is needed the way region emission requires.
+export function resolvePostingChannel(via) {
+  if (typeof via !== 'string') return 'unknown';
+  const trimmed = via.trim();
+  if (!trimmed) return 'unknown';
+  return trimmed === '—' ? 'direct-employer' : 'staffing-agency';
 }
 
 // package.json version -> "career-ops vX.Y.Z". Missing/unparsable package.json
@@ -820,6 +861,11 @@ export function buildNoResponseFrictionSignals(result, opts = {}) {
     if (!observedAt) continue; // unusable date — no record, no crash
 
     const severity = silentFacts.length >= 2 ? 'pattern' : 'single';
+    // postingChannel rides on the same anchor fact as observedAt — it is a
+    // property of that specific application (the tracker row's own `via`),
+    // not of the company card as a whole, so it must not be recomputed from
+    // a different fact than the one that decided observedAt/sourceHash.
+    const postingChannel = resolvePostingChannel(anchorFact.via);
 
     records.push({
       schemaVersion: 1,
@@ -832,6 +878,7 @@ export function buildNoResponseFrictionSignals(result, opts = {}) {
       sourceHash: computeSourceHash({ companyKey: card.key, observedAt }),
       observedAt,
       emittedBy,
+      postingChannel,
     });
   }
 
@@ -1245,10 +1292,10 @@ async function runSelfTest() {
       const keys = Object.keys(record).sort();
       check(
         JSON.stringify(keys) === JSON.stringify([
-          'companyKey', 'detail', 'emittedBy', 'observedAt', 'region', 'schemaVersion',
-          'severity', 'signalType', 'sourceDetector', 'sourceHash',
+          'companyKey', 'detail', 'emittedBy', 'observedAt', 'postingChannel', 'region',
+          'schemaVersion', 'severity', 'signalType', 'sourceDetector', 'sourceHash',
         ]),
-        'emitted record carries exactly the ratified schema-v1 10 fields, nothing extra (no notes/name leakage), nothing missing',
+        'emitted record carries the ratified schema-v1 10 fields plus the additive postingChannel field (#3010), nothing extra (no notes/name leakage), nothing missing',
       );
     }
 
@@ -1445,6 +1492,40 @@ async function runSelfTest() {
     } finally {
       rmSync(regionTmpDir, { recursive: true, force: true });
     }
+  }
+
+  // --- postingChannel field (#3010): derived from the tracker's own `via` ---
+  {
+    // agency-tagged via -> staffing-agency.
+    const agencyResult = buildCompanyCards(
+      { trackerRows: [{ ...row(260, 'AgencyPostedCo', 'Applied', '2026-05-01'), via: 'Hays' }], followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+      { now: NOW, silenceWindowDays: 28 },
+    );
+    check(agencyResult.companies[0].responsiveness.facts[0].via === 'Hays', 'row.via survives onto the silent fact');
+    const { records: agencySignals } = buildNoResponseFrictionSignals(agencyResult, { region: 'north-america/canada', emittedBy: 'career-ops vTEST' });
+    check(agencySignals[0]?.postingChannel === 'staffing-agency', 'a tagged agency via value emits postingChannel: staffing-agency');
+
+    // em-dash via (tracker's own "confirmed direct" convention) -> direct-employer.
+    const directResult = buildCompanyCards(
+      { trackerRows: [{ ...row(261, 'DirectConfirmedCo', 'Applied', '2026-05-01'), via: '—' }], followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+      { now: NOW, silenceWindowDays: 28 },
+    );
+    const { records: directSignals } = buildNoResponseFrictionSignals(directResult, { region: 'north-america/canada', emittedBy: 'career-ops vTEST' });
+    check(directSignals[0]?.postingChannel === 'direct-employer', 'an em-dash via value (confirmed direct, no agency) emits postingChannel: direct-employer');
+
+    // absent/blank via -> unknown (never guessed as direct-employer).
+    const noDataResult = buildCompanyCards(
+      { trackerRows: [row(262, 'NoViaDataCo', 'Applied', '2026-05-01')], followupRows: [], repostClusters: [], sourcesLoaded: { tracker: true, followups: false, scanHistory: false, statusLog: false } },
+      { now: NOW, silenceWindowDays: 28 },
+    );
+    const { records: noDataSignals } = buildNoResponseFrictionSignals(noDataResult, { region: 'north-america/canada', emittedBy: 'career-ops vTEST' });
+    check(noDataSignals[0]?.postingChannel === 'unknown', 'a row with no recorded via emits postingChannel: unknown, never a guessed direct-employer');
+
+    check(resolvePostingChannel('  ') === 'unknown', 'resolvePostingChannel: whitespace-only via is unknown, not staffing-agency');
+    check(resolvePostingChannel(null) === 'unknown', 'resolvePostingChannel: null via is unknown');
+    check(resolvePostingChannel(undefined) === 'unknown', 'resolvePostingChannel: undefined via is unknown');
+    check(resolvePostingChannel('Acme Staffing') === 'staffing-agency', 'resolvePostingChannel: any non-em-dash tagged agency name is staffing-agency');
+    check(resolvePostingChannel('—') === 'direct-employer', 'resolvePostingChannel: exact em-dash is direct-employer');
   }
 
   console.log(`\n  company-history self-test: ${pass} passed, ${fail} failed\n`);
