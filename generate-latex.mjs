@@ -97,7 +97,7 @@ export function validateLatexContent(content, compileOnly, engine = null) {
     } else if (engine === 'tectonic') {
       issues.push('CJK characters detected but no CJK package (xeCJK/ctex) is loaded. Generate from the CJK-aware template instead: `node build-cv-latex.mjs <input.json> <output.tex> --template=cjk` (templates/cv-template.cjk.tex), or use `pdf` mode (HTML to PDF, which renders CJK) for these CVs.');
     } else {
-      issues.push('CJK characters detected. pdfLaTeX has no CJK font support, and CJK rendering on this path requires the tectonic engine. Install tectonic (brew install tectonic) and regenerate from the CJK-aware template (`--template=cjk`), or use `pdf` mode (HTML to PDF, which renders CJK) for these CVs.');
+      issues.push('CJK characters detected. This CJK-aware LaTeX path needs a XeTeX-based engine (fontspec/xeCJK) — pdfLaTeX cannot compile it. Install tectonic (brew install tectonic) and regenerate from the CJK-aware template (`--template=cjk`), or use `pdf` mode (HTML to PDF, which renders CJK) for these CVs.');
     }
   }
 
