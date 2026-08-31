@@ -27,11 +27,21 @@ const REQUIRED_COMMANDS = [
   '\\\\resumeProjectHeading',
 ];
 
-const CJK_RE = /[぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ가-힯ᄀ-ᇿ]/;
+// Proper Unicode script test (not a hand-picked codepoint range) so
+// supplementary-plane ideographs (CJK Unified Ideographs Extension B and
+// later, e.g. U+20000+) are covered, not just the BMP. Needs the `u` flag --
+// without it, \p{Script=...} throws, and a bare codepoint-range class only
+// ever sees UTF-16 surrogate halves for anything above U+FFFF, never the
+// real character.
+const CJK_RE = /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u;
 
 // xeCJK (Latin-doc CJK) or ctex (Chinese-doc-class CJK) means the .tex
 // already loads a CJK-capable font setup (see templates/cv-template.cjk.tex).
-const CJK_PACKAGE_RE = /\\usepackage(?:\[[^\]]*\])?\{(?:xeCJK|ctex)\}/;
+// Matches xeCJK/ctex anywhere in a \usepackage package list (not just as the
+// sole argument, e.g. `\usepackage{fontspec,xeCJK}`), and ctex's own document
+// classes (`\documentclass{ctexart}` and friends), which auto-configure
+// xeCJK/LuaTeX-ja/CJK depending on engine without a separate \usepackage.
+const CJK_PACKAGE_RE = /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:xeCJK|ctex)\b[^}]*\}|\\documentclass(?:\[[^\]]*\])?\{ctex(?:art|rep|book)?\}/;
 
 /**
  * Resolve the LaTeX engine available on PATH, preferring tectonic (XeTeX

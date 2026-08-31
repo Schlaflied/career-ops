@@ -99,7 +99,7 @@ node generate-latex.mjs output/cv-name-company-date.tex output/custom-name.pdf
 
 CJK (Chinese/Japanese/Korean) variant of `cv-template.tex` — same placeholder tokens and structure, plus `fontspec` + `xeCJK` so kana/kanji/hangul render (#3553). Select it explicitly: `node build-cv-latex.mjs <input.json> <output.tex> --template=cjk`.
 
-**Prerequisite:** the `tectonic` engine (its backend is XeTeX, unlike pdflatex's pdfTeX). `generate-latex.mjs` only uses this path when tectonic is the resolved compiler; a pdflatex-only setup still gets redirected to `pdf` mode. You also need a CJK-capable font installed system-wide — fontspec/xeCJK read fonts from the OS, tectonic does not download or bundle them. The template defaults `\setCJKmainfont{Noto Serif CJK SC}`; if that font isn't installed, edit that line to a font you have (e.g. "Noto Sans CJK JP", "Microsoft YaHei", "Hiragino Mincho ProN").
+**Prerequisite:** a XeTeX-based engine (its backend is XeTeX, unlike pdflatex's pdfTeX). Locally that's the `tectonic` engine — `generate-latex.mjs` only accepts this path when tectonic is the resolved compiler; a pdflatex-only setup still gets redirected to `pdf` mode. **On Overleaf, switch the compiler to XeLaTeX** (Menu → Compiler → XeLaTeX) after uploading — Overleaf's default pdfLaTeX compiler can't build this file either. You also need a CJK-capable font installed system-wide — fontspec/xeCJK read fonts from the OS, tectonic does not download or bundle them. The template defaults `\setCJKmainfont{Noto Serif CJK SC}`; if that font isn't installed, edit that line to a font you have (e.g. "Noto Sans CJK JP", "Microsoft YaHei", "Hiragino Mincho ProN").
 
 ### portals.example.yml
 

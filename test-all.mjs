@@ -13470,6 +13470,39 @@ try {
   } else {
     fail(`CJK content should stay blocked with no engine resolved: ${JSON.stringify(noEngineCjk.issues)}`);
   }
+
+  // Supplementary-plane ideographs (CJK Unified Ideographs Extension B and
+  // later, e.g. U+20000) must be caught too, not just the BMP ranges — a
+  // codepoint-range regex without the `u` flag only ever sees lone UTF-16
+  // surrogate halves for these and silently misses them (CodeRabbit finding).
+  const supplementaryChar = String.fromCodePoint(0x20000);
+  const supplementaryCjk = validateLatexContent(baseTex(supplementaryChar), false, null);
+  if (supplementaryCjk.issues.some((i) => /CJK/.test(i))) {
+    pass('supplementary-plane CJK ideograph (U+20000) is detected, not just BMP CJK');
+  } else {
+    fail(`supplementary-plane CJK ideograph (U+20000) was not detected: ${JSON.stringify(supplementaryCjk.issues)}`);
+  }
+
+  // CJK_PACKAGE_RE must recognize xeCJK/ctex as part of a comma-separated
+  // \usepackage list, not only as the package's sole argument.
+  const listFormTex = baseTex('職務経歴').replace('\\documentclass{article}', '\\documentclass{article}\n\\usepackage{fontspec,xeCJK}');
+  const listFormResult = validateLatexContent(listFormTex, false, 'tectonic');
+  if (listFormResult.issues.length === 0) {
+    pass('\\usepackage{fontspec,xeCJK} (comma-separated list) is recognized as loading xeCJK');
+  } else {
+    fail(`comma-separated \\usepackage list with xeCJK was not recognized: ${JSON.stringify(listFormResult.issues)}`);
+  }
+
+  // CJK_PACKAGE_RE must also recognize the ctex bundle's own document classes
+  // (ctexart/ctexrep/ctexbook), which auto-configure CJK support without a
+  // separate \usepackage{xeCJK} line.
+  const ctexClassTex = baseTex('職務経歴').replace('\\documentclass{article}', '\\documentclass[fontset=windows]{ctexart}');
+  const ctexClassResult = validateLatexContent(ctexClassTex, false, 'tectonic');
+  if (ctexClassResult.issues.length === 0) {
+    pass('\\documentclass{ctexart} (ctex document class) is recognized as CJK-capable');
+  } else {
+    fail(`ctex document class was not recognized as CJK-capable: ${JSON.stringify(ctexClassResult.issues)}`);
+  }
 } catch (e) {
   fail(`LaTeX CJK template test crashed: ${e.message}`);
 }

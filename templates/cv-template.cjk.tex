@@ -4,10 +4,13 @@
 % License: MIT
 %
 % Adds xeCJK + a CJK font so Chinese/Japanese/Korean content renders.
-% Requires the tectonic engine (XeTeX backend) — pdflatex has no Unicode
-% font support and cannot compile this file. generate-latex.mjs selects
-% this template automatically when CJK characters are detected and
-% tectonic is the resolved compiler; see #3553.
+% Requires a XeTeX-based engine — pdflatex has no Unicode font support and
+% cannot compile this file. Locally that means the tectonic engine; on
+% Overleaf, set Menu -> Compiler -> XeLaTeX (Overleaf's default pdfLaTeX
+% compiler cannot build this file either). generate-latex.mjs does NOT
+% select this template automatically — you must explicitly generate from
+% it: `node build-cv-latex.mjs <input.json> <output.tex> --template=cjk`.
+% See #3553.
 %
 % Font requirement: \setCJKmainfont below names a font that must be
 % installed system-wide (fontspec/xeCJK read the OS font list via
