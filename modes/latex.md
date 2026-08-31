@@ -25,7 +25,8 @@ Export a tailored, ATS-optimized CV as a `.tex` file and compile it to PDF via `
 ## Language support
 
 - **Localized section titles are fine.** The validator counts `\section{}` blocks instead of matching English titles, so a Spanish/French/German CV (e.g. `\section{Educación}`) validates normally.
-- **CJK (Japanese / Chinese / Korean) is NOT supported on this path yet.** The template is a pdfLaTeX / Computer-Modern setup with no CJK font, so kana/kanji/hangul cannot render. `generate-latex.mjs` detects CJK characters and stops with guidance. For a Japanese CV, use `pdf` mode (HTML → PDF), which renders CJK via a `lang="ja"` font fallback.
+- **CJK (Japanese / Chinese / Korean) requires the `tectonic` engine.** The base template is a pdfLaTeX / Computer-Modern setup with no CJK font, so `generate-latex.mjs` blocks CJK content on that path with guidance. Tectonic's backend is XeTeX, so `fontspec` + `xeCJK` can render CJK: generate from the CJK-aware variant instead —
+  `node build-cv-latex.mjs <input.json> <output.tex> --template=cjk` (uses `templates/cv-template.cjk.tex`) — then run `generate-latex.mjs` as usual. This needs a CJK-capable font installed system-wide (fontspec/xeCJK read the OS font list; tectonic does not bundle fonts) — the template defaults to "Noto Serif CJK SC", swap `\setCJKmainfont{...}` for whatever CJK font you actually have installed if that name isn't found. Only tectonic can compile this path; pdflatex-only setups still get the blocking guidance. If tectonic isn't installed, or no CJK font is available, use `pdf` mode (HTML → PDF) instead, which renders CJK via a `lang="ja"` font fallback.
 
 ## JSON Input Schema
 
