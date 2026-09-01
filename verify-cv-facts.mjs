@@ -22,8 +22,8 @@ const DEFAULT_SOURCES = ['cv.md', 'article-digest.md'];
 const DEFAULT_CONFIG = join(ROOT, 'config', 'cv-facts.json');
 const TOOL_PROSE_WORDS = new Set([
   'a', 'an', 'and', 'at', 'built', 'by', 'containerized', 'deployment',
-  'deployments', 'for', 'from', 'in', 'of', 'on', 'production', 'project',
-  'team', 'the', 'to', 'using', 'with',
+  'deployments', 'feedback', 'for', 'from', 'in', 'of', 'on', 'production',
+  'project', 'team', 'the', 'to', 'using', 'with',
 ]);
 const TOOL_PHRASE_PATTERN = /^(?=.{1,80}$)[\p{L}\p{N}.][\p{L}\p{N}+#./-]*(?:\s+[\p{L}\p{N}.][\p{L}\p{N}+#./-]*){0,2}$/u;
 const DELEGATED_PARTY_RE = /\b(?:vendors?|agenc(?:y|ies)|contractors?|consultanc(?:y|ies)|consultants?|external teams?|outsourc(?:ed|ing)|implementation partners?)\b/i;
@@ -276,19 +276,84 @@ function normalizeFact(value) {
   return normalizeClaim(value).replace(/[.;:,]+$/g, '').trim();
 }
 
-/** Keep likely technology names while dropping ordinary prose fragments. */
-function isLikelyTool(value) {
+// A hand-maintained word-by-word stoplist is whack-a-mole (#3639):
+// "improving on-time submission", "recurring hr", "diagnosing", "improve
+// delivery", "efficiency" all reached TOOL_PROSE_WORDS as false positives in
+// one real session, and there is always another common gerund or
+// abstract-noun the list has not seen yet.
+//
+// Real technology names written in a CV are almost always either
+// Title-Cased ("React", "Google Cloud") or carry a digit/version token
+// ("n8n", "GPT-4") — `looksToolShaped` below accepts a fragment outright on
+// that shape alone. But a genuinely fabricated tool CAN be typed in
+// lowercase ("using kubernetes and terraform" instead of "Kubernetes"), and
+// the gate must not let that bypass detection just by losing capitalisation
+// — so a lowercase fragment is not simply dropped for failing the shape
+// test. Instead it falls through to this suffix check: English gerunds
+// ("improving", "diagnosing") and common abstract-noun endings
+// ("efficiency", "delivery", "submission", "operations") are the shape class
+// that actually produced every multi-word/derived false positive in the
+// issue, and essentially no product name is built that way. A lowercase
+// fragment that does NOT carry one of these prose endings (like
+// "kubernetes" or "google cloud") still falls through unchanged to the
+// pre-existing behaviour: extracted as a claim, and blocked later unless a
+// source backs it — so the fail-closed case #3639 itself relies on
+// ("explicit lowercase tool claims fail closed without a whitelist entry")
+// is untouched by this change.
+const PROSE_SUFFIX_RE = /(?:ing|tion|sion|ment|ency|ance|ery|ity|ness)s?$/i;
+
+/** Whether a raw (unnormalized) tool fragment looks like a real product name: Title Case, or carries a digit/version token (e.g. "n8n", "Python 3.11", "GPT-4"). */
+function looksToolShaped(rawValue) {
+  const trimmed = String(rawValue).trim();
+  if (!trimmed) return false;
+  // A digit anywhere marks a version or a name built on one: "n8n", "GPT-4",
+  // "Python 3.11".
+  if (/\d/.test(trimmed)) return true;
+  // Every word capitalised: "React", "Google Cloud", "Node.js". A single
+  // lowercase connector inside an otherwise-capitalised phrase never reaches
+  // here — TOOL_PHRASE_PATTERN caps a tool fragment at 3 words and the
+  // surrounding split on `and`/`with`/`in` already removes connectors.
+  return trimmed.split(/\s+/).every(word => /^[\p{Lu}]/u.test(word));
+}
+
+/**
+ * Keep likely technology names while dropping ordinary prose fragments.
+ *
+ * A fragment that does not look tool-shaped (see `looksToolShaped`) is kept
+ * anyway when it is already an exact substring of the source files: a real
+ * lowercase tool name ("kubernetes", "n8n") a user genuinely used and listed
+ * in cv.md must still pass, and rejecting it on casing alone would just trade
+ * one false-positive class for another.
+ *
+ * A fragment that is neither tool-shaped nor source-backed is dropped ONLY
+ * when it carries a prose-suffix ending (see `PROSE_SUFFIX_RE`) — the shape
+ * every concrete false positive in #3639 shared. Anything else falls through
+ * to the pre-existing behaviour (extracted, then checked against source),
+ * so an unbacked lowercase fragment that does NOT look like ordinary prose
+ * ("kubernetes", "google cloud") is still caught exactly as before.
+ */
+function isLikelyTool(value, sourceNormalized) {
   const normalized = normalizeFact(value);
   const words = normalized.split(' ');
   if (!normalized || words.length > 3 || words.some(word => TOOL_PROSE_WORDS.has(word))) return false;
-  // The surrounding grammar ("using", "built with", "tech stack") already
-  // asserts that each short fragment is a tool. Requiring capitalization or a
-  // hand-maintained allowlist makes unknown lowercase tools bypass the gate.
-  return TOOL_PHRASE_PATTERN.test(value.trim());
+  if (!TOOL_PHRASE_PATTERN.test(value.trim())) return false;
+  if (looksToolShaped(value)) return true;
+  if (sourceNormalized != null && sourceContainsFact(sourceNormalized, normalized)) return true;
+  return !words.some(word => PROSE_SUFFIX_RE.test(word));
 }
 
-/** Extract explicitly asserted employer, title, and tool claims from text. */
-export function factClaims(text) {
+/**
+ * Extract explicitly asserted employer, title, and tool claims from text.
+ *
+ * `sourceNormalized` (from `normalizeFact(stripMarkup(sourceText))`, as
+ * `verifyFacts` already builds it) is optional and used only to let a
+ * lowercase-but-genuine tool fragment through `isLikelyTool` when it is
+ * already backed by a source file — see that function's doc comment. Callers
+ * that omit it (existing direct callers, tests) get the same conservative
+ * shape-only behaviour as before: a tool-shaped fragment is extracted, an
+ * ordinary lowercase one is not.
+ */
+export function factClaims(text, sourceNormalized = null) {
   const clean = stripMarkup(text);
   const claims = [];
   const patterns = [
@@ -326,7 +391,7 @@ export function factClaims(text) {
         : [match[1] || match[2]];
       for (const raw of rawValues) {
         const value = normalizeFact(raw);
-        if (value && (kind !== 'tool' || isLikelyTool(raw))) claims.push({ kind, value });
+        if (value && (kind !== 'tool' || isLikelyTool(raw, sourceNormalized))) claims.push({ kind, value });
       }
     }
   }
@@ -615,7 +680,7 @@ export function verifyFacts(targetText, {
   const invented = [...targetClaims].filter(claim => !allowed.has(claim));
   const sourceNormalized = normalizeFact(stripMarkup(sourceText));
   const allowedFacts = new Set(config.allow_facts.map(normalizeFact));
-  const unsupportedFacts = [...factClaims(targetText), ...delegatedAuthorshipClaims(targetText, sourceText)]
+  const unsupportedFacts = [...factClaims(targetText, sourceNormalized), ...delegatedAuthorshipClaims(targetText, sourceText)]
     .filter(({ value }) => !sourceContainsFact(sourceNormalized, value) && !allowedFacts.has(value))
     .filter((claim, index, claims) => claims.findIndex(other => other.kind === claim.kind && other.value === claim.value) === index);
   const forbidden = config.forbidden_phrases
