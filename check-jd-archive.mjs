@@ -29,16 +29,46 @@
  * already carries the canonical company slug used to disambiguate captures —
  * no separate slugify pass is needed.
  *
- * Reports missing BOTH are flagged `missing-jd-archive`.
+ * Reports missing BOTH are flagged. The severity of that flag depends on the
+ * report's OWN tracker row (PR #2791 review, 2026-08-14 to 2026-08-17):
+ *
+ *   - No tracker available to join against (fresh install, no
+ *     data/applications.md yet, or a caller testing reports/jds/ in
+ *     isolation): the legacy hard `missing-jd-archive` finding — there is no
+ *     retroactive corpus to reason about, so every report is presumptively
+ *     the "going forward" case and gets full enforcement.
+ *   - Tracker row resolves to a TERMINAL state (Rejected, Discarded, SKIP,
+ *     Hired): no finding at all, not even a warning. The application is
+ *     done; a dead JD carries no further risk.
+ *   - Tracker row resolves to a LIVE state (Evaluated, Applied, Responded,
+ *     Interview, Offer), OR the join can't resolve the row (no match,
+ *     ambiguous match, or an unreadable/unparseable tracker) — a soft
+ *     `jd-archive-review-due` finding, same severity shape as
+ *     check-table-freshness.mjs's `review-due`: visible, never blocking CI.
+ *     santifer's ruling explicitly rejected a report-age/creation-date
+ *     cutoff here — the risk this validator exists for (a posting dying
+ *     before the JD is needed again) tracks whether the APPLICATION is
+ *     still live, not when the REPORT was written, so an old-but-live row
+ *     gets the same soft-warning treatment as a report written yesterday.
+ *
+ * Terminal/live classification joins report numbers against
+ * data/applications.md via tracker-parse.mjs's own extractTrackerReportNumbers
+ * (the same report<->row lookup set-status.mjs already relies on) and
+ * templates/states.yml via tracker-utils.mjs's loadCanonicalStates /
+ * resolveCanonicalState — no second tracker parser, read-only, fail-soft.
  *
  * Run: node check-jd-archive.mjs                        (JSON to stdout)
  *      node check-jd-archive.mjs --summary               (human-readable table)
  *      node check-jd-archive.mjs --reports-dir path/to    (override, for testing)
  *      node check-jd-archive.mjs --jds-dir path/to        (override, for testing)
+ *      node check-jd-archive.mjs --tracker path/to        (override, for testing)
+ *      node check-jd-archive.mjs --no-tracker             (skip the tracker join; legacy hard behavior)
  *      node check-jd-archive.mjs --self-test
  *      node check-jd-archive.mjs --help
  *
- * Exit codes: 1 if any `missing-jd-archive` finding, 0 otherwise.
+ * Exit codes: 1 if any hard `missing-jd-archive` finding, 0 otherwise —
+ * `jd-archive-review-due` alone never fails the run (matches
+ * check-table-freshness.mjs's `review-due`).
  *
  * Issue #2789 — github.com/santifer/career-ops
  */
@@ -46,13 +76,29 @@
 import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { fileURLToPath } from 'url';
 import { flagValue } from './lib/cli-flags.mjs';
 import { findCaptureForReport } from './jd-capture.mjs';
+import { getCareerOpsRoot } from './path-resolver.mjs';
+import { resolveColumns, parseTrackerRow, extractTrackerReportNumbers } from './tracker-parse.mjs';
+import { loadCanonicalStates, resolveCanonicalState, resolveTrackerPath } from './tracker-utils.mjs';
+import { isMainModule } from './lib/is-main-module.mjs';
 
 const CAREER_OPS = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_REPORTS_DIR = join(CAREER_OPS, 'reports');
-const DEFAULT_JDS_DIR = join(CAREER_OPS, 'jds');
+const DATA_ROOT = getCareerOpsRoot();
+const DEFAULT_REPORTS_DIR = join(DATA_ROOT, 'reports');
+const DEFAULT_JDS_DIR = join(DATA_ROOT, 'jds');
+const DEFAULT_TRACKER_PATH = resolveTrackerPath(DATA_ROOT);
+const STATES_FILE = join(CAREER_OPS, 'templates/states.yml');
+
+// The retroactive-enforcement terminal set (PR #2791, santifer 2026-08-17:
+// "build the state-based split you described" — Schlaflied 2026-08-16).
+// Confirmed against templates/states.yml's own canonical labels. "Offer" is
+// deliberately EXCLUDED even though states.yml marks it `terminal: true` for
+// lifecycle-ordering purposes (tracker-sync-check.mjs) — an offer in hand is
+// still an active, undecided application, not a closed file, and the JD may
+// still be needed for negotiation or comparison.
+const RETROACTIVE_TERMINAL_LABELS = new Set(['Rejected', 'Discarded', 'SKIP', 'Hired']);
 
 // Below this many non-whitespace characters, a "## Job Description" section
 // is treated as an unfilled placeholder, not an archive — a bare heading
@@ -65,6 +111,8 @@ const USAGE = `Usage:
   node check-jd-archive.mjs --summary             # human-readable table
   node check-jd-archive.mjs --reports-dir <path>  # override reports/ (testing)
   node check-jd-archive.mjs --jds-dir <path>      # override jds/ (testing)
+  node check-jd-archive.mjs --tracker <path>      # override data/applications.md (testing)
+  node check-jd-archive.mjs --no-tracker          # skip the tracker join (legacy hard-only behavior)
   node check-jd-archive.mjs --self-test           # run the in-memory test suite
   node check-jd-archive.mjs --help                # print this usage block and exit`;
 
@@ -74,6 +122,8 @@ const summaryMode = args.includes('--summary');
 const selfTestMode = args.includes('--self-test');
 const reportsDirArg = flagValue(args, '--reports-dir') ?? null;
 const jdsDirArg = flagValue(args, '--jds-dir') ?? null;
+const trackerArg = flagValue(args, '--tracker') ?? null;
+const noTrackerMode = args.includes('--no-tracker');
 
 // --- Report filename parsing ---
 // reports/{###}-{company-slug}-{YYYY-MM-DD}.md (AGENTS.md "Save report .md").
@@ -165,10 +215,84 @@ export function hasEmbeddedJdArchive(content) {
   return stripped.length >= MIN_ARCHIVE_CHARS;
 }
 
+// --- Tracker join (retroactive-enforcement classification) ---
+/**
+ * Classify every report number the tracker links to as 'terminal' or 'live',
+ * for the retroactive-enforcement severity split (PR #2791 review). Read-only
+ * — never writes, never touches applications.md's own lock.
+ *
+ * Reuses tracker-parse.mjs's own row parsing and report<->row lookup
+ * (extractTrackerReportNumbers, the same one set-status.mjs's `--report N`
+ * selector calls) and tracker-utils.mjs's loadCanonicalStates /
+ * resolveCanonicalState for states.yml — no second tracker parser, no second
+ * alias table.
+ *
+ * Returns null when there is nothing to join against at all (no tracker
+ * file, unreadable tracker, or an unparseable/missing states.yml) — the
+ * caller's contract is that null means "fall back to legacy hard
+ * enforcement," NOT "treat every report as live." A report number simply
+ * absent from the returned map (no linking row, or 2+ rows linking it) is
+ * the fail-soft case instead: the caller treats a missing map entry as
+ * 'live', matching santifer's "a row the join can't resolve gets the
+ * warning, not an error" instruction.
+ *
+ * @param {string|null} trackerPath - Path to applications.md, or null/absent to skip the join.
+ * @param {string} statesPath - Path to templates/states.yml.
+ * @returns {Map<number,'terminal'|'live'>|null}
+ */
+export function classifyReportsByTrackerState(trackerPath, statesPath) {
+  if (!trackerPath || !existsSync(trackerPath)) return null;
+
+  let lines;
+  try {
+    lines = readFileSync(trackerPath, 'utf-8').split('\n');
+  } catch {
+    return null; // unreadable tracker — fall back to legacy hard enforcement, not a crash
+  }
+
+  let states;
+  try {
+    states = loadCanonicalStates(statesPath);
+  } catch {
+    return null; // unreadable/malformed states.yml — same fallback
+  }
+
+  const colmap = resolveColumns(lines);
+  const byReport = new Map(); // reportNum -> matching tracker rows
+
+  for (const line of lines) {
+    const row = parseTrackerRow(line, colmap);
+    if (!row) continue;
+    for (const num of extractTrackerReportNumbers(row.report, row.notes)) {
+      if (!byReport.has(num)) byReport.set(num, []);
+      byReport.get(num).push(row);
+    }
+  }
+
+  const classification = new Map();
+  for (const [num, matches] of byReport) {
+    // Ambiguous — 2+ rows link the same report number — is the fail-soft
+    // case, same as "no row at all": leave it OUT of the map so the caller
+    // defaults it to 'live' rather than guessing which row is authoritative.
+    if (matches.length !== 1) continue;
+    const canonicalLabel = resolveCanonicalState(matches[0].status, states);
+    if (canonicalLabel && RETROACTIVE_TERMINAL_LABELS.has(canonicalLabel)) {
+      classification.set(num, 'terminal');
+    }
+    // An unrecognized/unresolvable status cell also stays out of the map —
+    // fail-soft to 'live', not an error.
+  }
+
+  return classification;
+}
+
 // --- Core check ---
 // Pure function over an already-resolved reports/jds directory pair, so the
-// self-test runs entirely on its own fixtures.
-export function checkJdArchive(reportsDir, jdsDir) {
+// self-test runs entirely on its own fixtures. `trackerPath`/`statesPath` are
+// optional — omitting trackerPath (or pointing it at a file that doesn't
+// exist) preserves the pre-#2791-review hard-enforcement-only behavior, which
+// is what every fixture-only self-test below still exercises.
+export function checkJdArchive(reportsDir, jdsDir, { trackerPath = null, statesPath = STATES_FILE } = {}) {
   const findings = [];
   const warnings = [];
   let reportsScanned = 0;
@@ -176,6 +300,8 @@ export function checkJdArchive(reportsDir, jdsDir) {
   if (!existsSync(reportsDir)) {
     return { reportsScanned, findings, warnings };
   }
+
+  const classification = classifyReportsByTrackerState(trackerPath, statesPath);
 
   const files = readdirSync(reportsDir).filter((f) => f.endsWith('.md')).sort();
 
@@ -199,15 +325,37 @@ export function checkJdArchive(reportsDir, jdsDir) {
     }
     if (capture !== null) continue;
 
-    findings.push({
-      type: 'missing-jd-archive',
-      file,
-      report: meta ? meta.reportNum : null,
-      companySlug: meta ? meta.companySlug : null,
-      detail: meta
-        ? `no "## Job Description" section with archived JD text, and no jds/ capture found for report ${meta.reportNum} (company slug "${meta.companySlug}")`
-        : `no "## Job Description" section with archived JD text, and the filename does not match the {###}-{company-slug}-{YYYY-MM-DD}.md convention so no jds/ capture could be resolved`,
-    });
+    const reportNum = meta ? meta.reportNum : null;
+    // No tracker joined at all -> legacy hard behavior (going-forward /
+    // fresh-install case: nothing to classify against, so full enforcement).
+    // Tracker joined -> 'terminal' skips entirely; anything else (explicit
+    // 'live', or absent from the map at all — no row, ambiguous rows, or an
+    // unresolvable status) is the soft review-due finding.
+    const state = classification === null
+      ? null
+      : (reportNum !== null && classification.get(reportNum) === 'terminal' ? 'terminal' : 'live');
+
+    if (state === 'terminal') continue; // done deal, zero retroactive risk — not even a warning
+
+    const detail = meta
+      ? `no "## Job Description" section with archived JD text, and no jds/ capture found for report ${meta.reportNum} (company slug "${meta.companySlug}")`
+      : `no "## Job Description" section with archived JD text, and the filename does not match the {###}-{company-slug}-{YYYY-MM-DD}.md convention so no jds/ capture could be resolved`;
+
+    findings.push(state === 'live'
+      ? {
+        type: 'jd-archive-review-due',
+        file,
+        report: reportNum,
+        companySlug: meta ? meta.companySlug : null,
+        detail: `${detail} — tracker row is still live (or unresolved), so this is a soft warning, not a blocker`,
+      }
+      : {
+        type: 'missing-jd-archive',
+        file,
+        report: reportNum,
+        companySlug: meta ? meta.companySlug : null,
+        detail,
+      });
   }
 
   return { reportsScanned, findings, warnings };
@@ -228,13 +376,14 @@ function printSummary(result) {
       ? '  No report files found under reports/.\n'
       : '  Every report has an archived JD (embedded section or jds/ capture).\n');
   } else {
-    const header = '  ' + 'Report'.padEnd(10) + 'File'.padEnd(38) + 'Detail';
+    const header = '  ' + 'Type'.padEnd(22) + 'Report'.padEnd(10) + 'File'.padEnd(30) + 'Detail';
     console.log(header);
     console.log('  ' + '-'.repeat(90));
     for (const f of findings) {
+      const typeCol = f.type.padEnd(22);
       const reportCol = (f.report !== null ? String(f.report) : '?').padEnd(10);
-      const fileCol = f.file.substring(0, 36).padEnd(38);
-      console.log('  ' + reportCol + fileCol + f.detail);
+      const fileCol = f.file.substring(0, 28).padEnd(30);
+      console.log('  ' + typeCol + reportCol + fileCol + f.detail);
     }
     console.log('');
   }
@@ -428,6 +577,66 @@ function runSelfTest() {
     const noJdsDirResult = checkJdArchive(reportsDir, join(tmpDir, 'jds-does-not-exist'));
     check(noJdsDirResult.findings.some((f) => f.file === '001-acme-2026-01-15.md'),
       'missing jds/ directory does not crash the lookup — falls through to flagged');
+
+    // --- Retroactive-enforcement classification (PR #2791 review, 2026-08-17) ---
+    // Four reports, all missing their archive, joined against one synthetic
+    // tracker exercising all four classification outcomes at once: a
+    // terminal-state row, a live-state row, a report number with no linking
+    // row at all, and one linked by two rows (ambiguous).
+    const trackerReportsDir = join(tmpDir, 'reports-tracker');
+    mkdirSync(trackerReportsDir, { recursive: true });
+    writeFileSync(join(trackerReportsDir, '101-acme-2026-01-01.md'), '# Evaluation: Acme — Analyst\n\n**URL:** https://example.com\n');
+    writeFileSync(join(trackerReportsDir, '102-globex-2026-01-02.md'), '# Evaluation: Globex — Analyst\n\n**URL:** https://example.com\n');
+    writeFileSync(join(trackerReportsDir, '103-initech-2026-01-03.md'), '# Evaluation: Initech — Analyst\n\n**URL:** https://example.com\n');
+    writeFileSync(join(trackerReportsDir, '104-umbrella-2026-01-04.md'), '# Evaluation: Umbrella — Analyst\n\n**URL:** https://example.com\n');
+
+    const trackerPath = join(tmpDir, 'applications.md');
+    writeFileSync(trackerPath, [
+      '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |',
+      '|---|------|---------|------|-------|--------|-----|--------|-------|',
+      // 101: terminal state (Rejected) -> no finding at all.
+      '| 1 | 2026-01-01 | Acme | Analyst | 4.0/5 | Rejected | ✅ | [101](reports/101-acme-2026-01-01.md) | |',
+      // 102: live state (Applied) -> soft review-due finding.
+      '| 2 | 2026-01-02 | Globex | Analyst | 4.0/5 | Applied | ✅ | [102](reports/102-globex-2026-01-02.md) | |',
+      // 103 (Initech) is deliberately unlinked by any row -> unresolved join.
+      // 104: linked by TWO rows -> ambiguous join, fails soft.
+      '| 3 | 2026-01-04 | Umbrella | Analyst A | 4.0/5 | Applied | ✅ | [104](reports/104-umbrella-2026-01-04.md) | |',
+      '| 4 | 2026-01-04 | Umbrella | Analyst B | 3.5/5 | Interview | ✅ | [104](reports/104-umbrella-2026-01-04.md) | |',
+    ].join('\n'));
+
+    const trackerResult = checkJdArchive(trackerReportsDir, jdsDir, { trackerPath });
+    const findingTypeByFile = new Map(trackerResult.findings.map((f) => [f.file, f.type]));
+
+    check(!findingTypeByFile.has('101-acme-2026-01-01.md'),
+      'terminal-state (Rejected) tracker row -> report missing its archive gets NO finding at all, not even a warning');
+    check(findingTypeByFile.get('102-globex-2026-01-02.md') === 'jd-archive-review-due',
+      'live-state (Applied) tracker row -> report missing its archive gets a soft jd-archive-review-due finding, not a hard blocker');
+    check(findingTypeByFile.get('103-initech-2026-01-03.md') === 'jd-archive-review-due',
+      'report number with NO linking tracker row -> unresolved join fails soft to the same review-due warning, not an error');
+    check(findingTypeByFile.get('104-umbrella-2026-01-04.md') === 'jd-archive-review-due',
+      'report number linked by 2+ tracker rows (ambiguous) -> fails soft to review-due rather than guessing which row is authoritative');
+    check(!hasMissingArchive(trackerResult.findings),
+      'a tracker-joined run touching only terminal/live/unresolved rows never trips the hard-blocking hasMissingArchive/exit-1 path');
+
+    // Going-forward / no-tracker enforcement is unaffected: the SAME 4
+    // fixtures, with the tracker join disabled, are the pre-existing hard
+    // blocker — the retroactive softening only ever activates when there IS
+    // a resolvable tracker to join against, never as a blanket downgrade.
+    const noTrackerResult = checkJdArchive(trackerReportsDir, jdsDir); // no options -> trackerPath stays null
+    check(noTrackerResult.findings.filter((f) => f.type === 'missing-jd-archive').length === 4,
+      'without a tracker to join against, all 4 fixtures stay the legacy hard missing-jd-archive finding (going-forward/fresh-install enforcement unaffected)');
+    check(hasMissingArchive(noTrackerResult.findings) === true,
+      'no-tracker run still trips hasMissingArchive (exit 1) — retroactive softening never applies without a resolvable tracker');
+
+    // --no-tracker is the CLI's own opt-out; verify it via the same
+    // options-object contract the CLI wires it through.
+    const explicitNoTrackerResult = checkJdArchive(trackerReportsDir, jdsDir, { trackerPath: null });
+    check(hasMissingArchive(explicitNoTrackerResult.findings) === true,
+      'passing trackerPath: null explicitly reproduces the --no-tracker CLI path (hard enforcement)');
+
+    // classifyReportsByTrackerState in isolation: nonexistent tracker file -> null.
+    check(classifyReportsByTrackerState(join(tmpDir, 'does-not-exist.md'), STATES_FILE) === null,
+      'classifyReportsByTrackerState returns null (the fall-back-to-hard signal) when the tracker file does not exist');
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -437,7 +646,7 @@ function runSelfTest() {
 }
 
 // --- Run (CLI only; guarded so the module is safely importable for tests) ---
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
   if (args.includes('--help') || args.includes('-h')) {
     console.log(USAGE);
     process.exit(0);
@@ -449,8 +658,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
   const reportsDir = reportsDirArg || DEFAULT_REPORTS_DIR;
   const jdsDir = jdsDirArg || DEFAULT_JDS_DIR;
+  const trackerPath = noTrackerMode ? null : (trackerArg || DEFAULT_TRACKER_PATH);
 
-  const result = checkJdArchive(reportsDir, jdsDir);
+  const result = checkJdArchive(reportsDir, jdsDir, { trackerPath });
 
   if (summaryMode) {
     printSummary(result);
