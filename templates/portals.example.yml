@@ -1544,6 +1544,12 @@ tracked_companies:
     notes: "London. Popularized Deployed Engineer role."
     enabled: true
 
+  - name: Gem
+    api: https://api.gem.com/job_board/v0/gem/job_posts/
+    provider: gem
+    notes: "San Francisco. Recruiting platform — example of Gem's documented REST Job Board API (verified vanity path, not guessed from the company name)."
+    enabled: true
+
   - name: Airtable
     careers_url: https://job-boards.greenhouse.io/airtable
     api: https://boards-api.greenhouse.io/v1/boards/airtable/jobs

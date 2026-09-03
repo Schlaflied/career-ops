@@ -88,10 +88,14 @@ function toEpochMs(value) {
 }
 
 // Same tag-strip + entity-decode convention as the other scraping providers
-// (deutschebahn.mjs, hecklerkoch.mjs, etc.) that get raw HTML back.
+// (deutschebahn.mjs, hecklerkoch.mjs, etc.) that get raw HTML back. Entities
+// are decoded BEFORE tags are stripped: a double-encoded tag like
+// "&lt;strong&gt;Role&lt;/strong&gt;" isn't a literal "<...>" yet, so
+// stripping first leaves it untouched and a later decode turns it back into
+// what looks like real markup in the plain-text output.
 function htmlToText(html) {
   if (typeof html !== 'string' || !html) return '';
-  return decodeEntities(html.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+  return decodeEntities(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 // Concatenate intro + body + outro in page order, then append compensationHtml
@@ -153,6 +157,12 @@ function resolveBoardId(entry) {
   const match = parsed.pathname.match(/^\/([^/?#]+)/);
   return match ? match[1] : null;
 }
+
+// Canonical REST posting shape is exactly `/{vanity_path}/{numeric id}` (see
+// the confirmed live example `jobs.gem.com/gem/4965519002`). Without this,
+// any HTTPS jobs.gem.com URL — including non-posting pages like `/login` —
+// is accepted as a job.
+const GEM_POSTING_PATH_RE = /^\/[^/]+\/[0-9]+\/?$/;
 
 /** @param {any} loc */
 function formatLocation(loc) {
@@ -255,20 +265,41 @@ export default {
 };
 
 /**
- * Parse Gem's documented GET response.  The endpoint has appeared both as a
- * bare array and wrapped in `job_posts`; accepting both keeps the provider
- * tolerant without treating an arbitrary object as a posting.
+ * Extract the row array from Gem's documented GET response. The endpoint has
+ * appeared both as a bare array and wrapped in `job_posts`; accepting both
+ * keeps the provider tolerant. `[]`/`{}`/`null` are legitimately contentless
+ * (an empty board), so they resolve to no rows — but any OTHER nonempty
+ * object shape is undocumented and gets rejected loudly rather than silently
+ * read as "zero jobs," which would make a changed Gem response look like an
+ * empty board and drop every posting without a trace.
+ * @param {any} json
+ */
+function extractRestRows(json) {
+  if (Array.isArray(json)) return json;
+  if (json === null || json === undefined) return [];
+  if (typeof json === 'object') {
+    if (Array.isArray(json.job_posts)) return json.job_posts;
+    if (Object.keys(json).length === 0) return [];
+    throw new Error(
+      `gem: unsupported REST response envelope — expected an array or {job_posts: [...]}, got an object with keys: ${Object.keys(json).join(', ')}`
+    );
+  }
+  throw new Error(`gem: unsupported REST response envelope — expected an array or {job_posts: [...]}, got ${typeof json}`);
+}
+
+/**
+ * Parse Gem's documented GET response.
  * @param {any} json
  * @param {string} companyName
  */
 export function parseRestResponse(json, companyName) {
-  const rows = Array.isArray(json) ? json : (Array.isArray(json?.job_posts) ? json.job_posts : []);
+  const rows = extractRestRows(json);
   return rows.filter(j => j && typeof j.title === 'string' && j.title.trim() && typeof j.absolute_url === 'string')
     .map(j => {
       let url;
       try {
         const parsed = new URL(j.absolute_url);
-        if (parsed.protocol !== 'https:' || parsed.hostname !== 'jobs.gem.com') return null;
+        if (parsed.protocol !== 'https:' || parsed.hostname !== 'jobs.gem.com' || !GEM_POSTING_PATH_RE.test(parsed.pathname)) return null;
         url = parsed.href;
       } catch {
         return null;

@@ -80,6 +80,71 @@ try {
     fail(`parseRestResponse() = ${JSON.stringify(restRows)}`);
   }
 
+  // Canonical posting path is exactly `/{vanity_path}/{numeric id}` — an
+  // off-path URL on the trusted host (e.g. the board's own /login page) must
+  // not be read as a job.
+  const offPathRows = parseRestResponse([
+    { title: 'Not a job', absolute_url: 'https://jobs.gem.com/login' },
+    { title: 'Also not a job', absolute_url: 'https://jobs.gem.com/example-company/settings' },
+    { title: 'Real job', absolute_url: 'https://jobs.gem.com/example-company/456' },
+  ], 'Gem REST');
+  if (offPathRows.length === 1 && offPathRows[0].title === 'Real job') {
+    pass('parseRestResponse() rejects jobs.gem.com URLs off the canonical /{vanity_path}/{id} posting path');
+  } else {
+    fail(`parseRestResponse() off-path = ${JSON.stringify(offPathRows)}`);
+  }
+
+  // job_posts-wrapped envelope — the alternate documented shape.
+  const wrappedRows = parseRestResponse({
+    job_posts: [{ title: 'Wrapped Role', absolute_url: 'https://jobs.gem.com/example-company/789' }],
+  }, 'Gem REST');
+  if (wrappedRows.length === 1 && wrappedRows[0].title === 'Wrapped Role') {
+    pass('parseRestResponse() reads the job_posts-wrapped envelope shape');
+  } else {
+    fail(`parseRestResponse() wrapped = ${JSON.stringify(wrappedRows)}`);
+  }
+
+  // Empty/contentless envelopes are a legitimate empty board, not an error.
+  let emptyEnvelopesOk = true;
+  for (const body of [[], {}, null, undefined]) {
+    const rows = parseRestResponse(body, 'Gem REST');
+    if (!Array.isArray(rows) || rows.length !== 0) {
+      emptyEnvelopesOk = false;
+      fail(`parseRestResponse(${JSON.stringify(body)}) = ${JSON.stringify(rows)}, expected []`);
+      break;
+    }
+  }
+  if (emptyEnvelopesOk) pass('parseRestResponse() returns [] for empty/contentless envelopes ([], {}, null, undefined)');
+
+  // Any OTHER nonempty, non-array, non-job_posts object shape is undocumented
+  // and must be rejected loudly — silently reading it as zero jobs would make
+  // a changed Gem response look like an empty board.
+  try {
+    parseRestResponse({ error: 'rate limited' }, 'Gem REST');
+    fail('parseRestResponse() should throw for an unsupported nonempty envelope shape');
+  } catch (e) {
+    if (/unsupported REST response envelope/.test(e.message)) {
+      pass('parseRestResponse() throws a descriptive error for an unsupported nonempty envelope shape');
+    } else {
+      fail(`parseRestResponse() unsupported-envelope error = ${e.message}`);
+    }
+  }
+
+  // REST content fallback (when content_plain is absent): entities must be
+  // decoded BEFORE tags are stripped, or a double-encoded tag like
+  // "&lt;strong&gt;" survives stripping and then decodes into what looks like
+  // real markup in the plain-text output.
+  const restContentFallbackRows = parseRestResponse([{
+    title: 'Content Fallback Role',
+    absolute_url: 'https://jobs.gem.com/example-company/999',
+    content: '<p>Own &amp; ship the roadmap.</p> Escaped: &lt;strong&gt;Role&lt;/strong&gt;',
+  }], 'Gem REST');
+  if (restContentFallbackRows[0]?.description === 'Own & ship the roadmap. Escaped: Role') {
+    pass('parseRestResponse() falls back to content, decoding entities before stripping tags');
+  } else {
+    fail(`parseRestResponse() content fallback description = ${JSON.stringify(restContentFallbackRows[0]?.description)}`);
+  }
+
   let restUrl = null;
   let restOptions = null;
   const fetchedRest = await gem.fetch(
