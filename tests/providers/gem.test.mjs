@@ -80,18 +80,31 @@ try {
     fail(`parseRestResponse() = ${JSON.stringify(restRows)}`);
   }
 
-  // Canonical posting path is exactly `/{vanity_path}/{numeric id}` — an
-  // off-path URL on the trusted host (e.g. the board's own /login page) must
-  // not be read as a job.
+  // Canonical posting path is exactly `/{vanity_path}/{id}` (two nonempty
+  // segments) — an off-path URL on the trusted host (e.g. the board's own
+  // /login page, or a posting URL with an extra trailing segment) must not
+  // be read as a job.
   const offPathRows = parseRestResponse([
-    { title: 'Not a job', absolute_url: 'https://jobs.gem.com/login' },
-    { title: 'Also not a job', absolute_url: 'https://jobs.gem.com/example-company/settings' },
+    { title: 'Not a job (one segment)', absolute_url: 'https://jobs.gem.com/login' },
+    { title: 'Not a job (three segments)', absolute_url: 'https://jobs.gem.com/example-company/456/apply' },
     { title: 'Real job', absolute_url: 'https://jobs.gem.com/example-company/456' },
   ], 'Gem REST');
   if (offPathRows.length === 1 && offPathRows[0].title === 'Real job') {
     pass('parseRestResponse() rejects jobs.gem.com URLs off the canonical /{vanity_path}/{id} posting path');
   } else {
     fail(`parseRestResponse() off-path = ${JSON.stringify(offPathRows)}`);
+  }
+
+  // The Gem REST board's canonical id isn't always numeric — an opaque
+  // alphanumeric id must still be accepted as a valid two-segment posting
+  // path, not dropped by an over-narrow digit-only matcher.
+  const opaqueIdRows = parseRestResponse([
+    { title: 'Opaque ID Role', absolute_url: 'https://jobs.gem.com/example-company/aBc-123_XYZ' },
+  ], 'Gem REST');
+  if (opaqueIdRows.length === 1 && opaqueIdRows[0].title === 'Opaque ID Role') {
+    pass('parseRestResponse() accepts a canonical posting URL with an opaque, nonnumeric id');
+  } else {
+    fail(`parseRestResponse() opaque id = ${JSON.stringify(opaqueIdRows)}`);
   }
 
   // job_posts-wrapped envelope — the alternate documented shape.

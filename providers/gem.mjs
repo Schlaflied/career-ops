@@ -158,11 +158,13 @@ function resolveBoardId(entry) {
   return match ? match[1] : null;
 }
 
-// Canonical REST posting shape is exactly `/{vanity_path}/{numeric id}` (see
-// the confirmed live example `jobs.gem.com/gem/4965519002`). Without this,
-// any HTTPS jobs.gem.com URL — including non-posting pages like `/login` —
-// is accepted as a job.
-const GEM_POSTING_PATH_RE = /^\/[^/]+\/[0-9]+\/?$/;
+// Canonical REST posting shape is exactly `/{vanity_path}/{id}` (see the
+// confirmed live example `jobs.gem.com/gem/4965519002`). Without this, any
+// HTTPS jobs.gem.com URL — including non-posting pages like `/login` — is
+// accepted as a job. The id segment isn't always numeric: the public Gem
+// REST board also returns opaque, nonnumeric canonical ids, so this only
+// requires exactly two nonempty path segments rather than a digit-only id.
+const GEM_POSTING_PATH_RE = /^\/[^/?#]+\/[^/?#]+\/?$/;
 
 /** @param {any} loc */
 function formatLocation(loc) {
