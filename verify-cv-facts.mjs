@@ -22,8 +22,9 @@ const DEFAULT_SOURCES = ['cv.md', 'article-digest.md'];
 const DEFAULT_CONFIG = join(ROOT, 'config', 'cv-facts.json');
 const TOOL_PROSE_WORDS = new Set([
   'a', 'an', 'and', 'at', 'built', 'by', 'containerized', 'deployment',
-  'deployments', 'feedback', 'for', 'from', 'in', 'of', 'on', 'production',
-  'project', 'team', 'the', 'to', 'using', 'with',
+  'deployments', 'delivery', 'diagnosing', 'efficiency', 'feedback', 'for', 'from', 'improve',
+  'improving', 'in', 'of', 'on', 'on-time', 'operations', 'production', 'project',
+  'recurring', 'resolving', 'submission', 'team', 'the', 'to', 'using', 'with',
 ]);
 const TOOL_PHRASE_PATTERN = /^(?=.{1,80}$)[\p{L}\p{N}.][\p{L}\p{N}+#./-]*(?:\s+[\p{L}\p{N}.][\p{L}\p{N}+#./-]*){0,2}$/u;
 const DELEGATED_PARTY_RE = /\b(?:vendors?|agenc(?:y|ies)|contractors?|consultanc(?:y|ies)|consultants?|external teams?|outsourc(?:ed|ing)|implementation partners?)\b/i;
@@ -276,32 +277,6 @@ function normalizeFact(value) {
   return normalizeClaim(value).replace(/[.;:,]+$/g, '').trim();
 }
 
-// A hand-maintained word-by-word stoplist is whack-a-mole (#3639):
-// "improving on-time submission", "recurring hr", "diagnosing", "improve
-// delivery", "efficiency" all reached TOOL_PROSE_WORDS as false positives in
-// one real session, and there is always another common gerund or
-// abstract-noun the list has not seen yet.
-//
-// Real technology names written in a CV are almost always either
-// Title-Cased ("React", "Google Cloud") or carry a digit/version token
-// ("n8n", "GPT-4") — `looksToolShaped` below accepts a fragment outright on
-// that shape alone. But a genuinely fabricated tool CAN be typed in
-// lowercase ("using kubernetes and terraform" instead of "Kubernetes"), and
-// the gate must not let that bypass detection just by losing capitalisation
-// — so a lowercase fragment is not simply dropped for failing the shape
-// test. Instead it falls through to this suffix check: English gerunds
-// ("improving", "diagnosing") and common abstract-noun endings
-// ("efficiency", "delivery", "submission", "operations") are the shape class
-// that actually produced every multi-word/derived false positive in the
-// issue, and essentially no product name is built that way. A lowercase
-// fragment that does NOT carry one of these prose endings (like
-// "kubernetes" or "google cloud") still falls through unchanged to the
-// pre-existing behaviour: extracted as a claim, and blocked later unless a
-// source backs it — so the fail-closed case #3639 itself relies on
-// ("explicit lowercase tool claims fail closed without a whitelist entry")
-// is untouched by this change.
-const PROSE_SUFFIX_RE = /(?:ing|tion|sion|ment|ency|ance|ery|ity|ness)s?$/i;
-
 /** Whether a raw (unnormalized) tool fragment looks like a real product name: Title Case, or carries a digit/version token (e.g. "n8n", "Python 3.11", "GPT-4"). */
 function looksToolShaped(rawValue) {
   const trimmed = String(rawValue).trim();
@@ -325,21 +300,20 @@ function looksToolShaped(rawValue) {
  * in cv.md must still pass, and rejecting it on casing alone would just trade
  * one false-positive class for another.
  *
- * A fragment that is neither tool-shaped nor source-backed is dropped ONLY
- * when it carries a prose-suffix ending (see `PROSE_SUFFIX_RE`) — the shape
- * every concrete false positive in #3639 shared. Anything else falls through
- * to the pre-existing behaviour (extracted, then checked against source),
- * so an unbacked lowercase fragment that does NOT look like ordinary prose
- * ("kubernetes", "google cloud") is still caught exactly as before.
+ * A fragment that is neither tool-shaped nor source-backed is still retained
+ * by default, preserving the gate's fail-closed behavior for lowercase names.
+ * Only exact words observed as prose false positives are rejected through
+ * `TOOL_PROSE_WORDS`; morphological suffixes are deliberately not used
+ * because real products such as Spring, Unity, and Processing share them.
  */
 function isLikelyTool(value, sourceNormalized) {
   const normalized = normalizeFact(value);
   const words = normalized.split(' ');
-  if (!normalized || words.length > 3 || words.some(word => TOOL_PROSE_WORDS.has(word))) return false;
+  if (!normalized || words.length > 3) return false;
   if (!TOOL_PHRASE_PATTERN.test(value.trim())) return false;
   if (looksToolShaped(value)) return true;
   if (sourceNormalized != null && sourceContainsFact(sourceNormalized, normalized)) return true;
-  return !words.some(word => PROSE_SUFFIX_RE.test(word));
+  return !words.some(word => TOOL_PROSE_WORDS.has(word));
 }
 
 /**

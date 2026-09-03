@@ -137,6 +137,33 @@ try {
     }
   }
 
+  // Review regression: a word ending that looks like ordinary English is not
+  // enough to discard a lowercase tool claim. Spring, Unity, and Processing
+  // are real technology names and must remain subject to source verification.
+  for (const tool of ['spring', 'unity', 'processing']) {
+    const directClaims = factClaims(`Built this using ${tool}.`).filter(claim => claim.kind === 'tool');
+    const unbacked = verifyFacts(`Built this using ${tool}.`, {
+      sourcePaths: [source], configPath: config,
+    });
+    if (directClaims.some(claim => claim.value === tool)
+        && unbacked.verdict === 'block'
+        && unbacked.unsupportedFacts.some(claim => claim.kind === 'tool' && claim.value === tool)) {
+      pass(`lowercase technology with prose-like suffix remains fail-closed: ${tool}`);
+    } else {
+      fail(`lowercase technology bypassed the fact gate: ${JSON.stringify({ tool, directClaims, unbacked })}`);
+    }
+  }
+
+  writeFileSync(source, 'Built the workflow using delivery.');
+  const sourceBackedCollision = verifyFacts('Built the workflow using delivery.', {
+    sourcePaths: [source], configPath: config,
+  });
+  if (sourceBackedCollision.verdict === 'pass') {
+    pass('source evidence overrides an exact prose-word collision');
+  } else {
+    fail(`source-backed lowercase tool collided with the prose filter: ${JSON.stringify(sourceBackedCollision)}`);
+  }
+
   // The fix must not let a fabricated tool typed in lowercase evade
   // detection just by losing its capitalisation — the false-positive fix is
   // scoped to prose-shaped (gerund/abstract-noun) fragments only.
