@@ -906,7 +906,10 @@ search_queries:
 #   eightfold       <tenant>.eightfold.ai  (Eightfold AI talent-acquisition boards; a branded CNAME like
 #                   careers.<company>.com is NOT matched — point at the eightfold.ai host. Optional domain:
 #                   for multi-brand tenants. Page size is server-capped at 10, so bound big boards with max_pages)
-#   gem             jobs.gem.com/<boardId>
+#   gem             jobs.gem.com/<boardId>; or explicit api:
+#                   https://api.gem.com/job_board/v0/<vanity_path>/job_posts/
+#                   (copy the vanity path from the employer's public Gem URL;
+#                   do not guess it from the company name)
 #   join            join.com/companies/<slug>  (SSR __NEXT_DATA__ parse, no separate API)
 #   icims           careers-<tenant>.icims.com / *.icims.com
 #

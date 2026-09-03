@@ -21,7 +21,7 @@
 import { decodeEntities } from './_html-entities.mjs';
 
 const GEM_API_URL = 'https://jobs.gem.com/api/public/graphql/batch';
-const ALLOWED_GEM_HOSTS = new Set(['jobs.gem.com']);
+const ALLOWED_GEM_HOSTS = new Set(['jobs.gem.com', 'api.gem.com']);
 
 const JOB_BOARD_LIST_QUERY = `query JobBoardList($boardId: String!) {
   oatsExternalJobPostings(boardId: $boardId) {
@@ -79,6 +79,14 @@ function toEpochMsFromSeconds(value) {
   return Number.isFinite(n) && n > 0 ? n * 1000 : undefined;
 }
 
+// REST uses ISO timestamps (`first_published_at`); keep invalid/missing dates
+// as an omitted field so recency filters do not mistake them for epoch zero.
+function toEpochMs(value) {
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+  const parsed = typeof value === 'number' ? value * 1000 : Date.parse(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 // Same tag-strip + entity-decode convention as the other scraping providers
 // (deutschebahn.mjs, hecklerkoch.mjs, etc.) that get raw HTML back.
 function htmlToText(html) {
@@ -116,6 +124,21 @@ function assertGemUrl(url) {
   return url;
 }
 
+/** Resolve an explicitly pinned URL for Gem's documented REST job-board API. */
+function resolveRestApiUrl(entry) {
+  const raw = typeof entry.api === 'string' ? entry.api : '';
+  if (!raw) return null;
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'api.gem.com') return null;
+  if (!/^\/job_board\/v0\/[^/?#]+\/job_posts\/?$/.test(parsed.pathname)) return null;
+  return parsed;
+}
+
 /** @param {import('./_types.js').PortalEntry} entry */
 function resolveBoardId(entry) {
   const raw = typeof entry.careers_url === 'string' ? entry.careers_url : '';
@@ -144,11 +167,22 @@ export default {
   id: 'gem',
 
   detect(entry) {
+    const restApiUrl = resolveRestApiUrl(entry);
+    if (restApiUrl) return { url: restApiUrl.href };
     const boardId = resolveBoardId(entry);
     return boardId ? { url: `${GEM_API_URL}?board=${boardId}` } : null;
   },
 
   async fetch(entry, ctx) {
+    // Gem documents this unauthenticated REST surface for custom career pages.
+    // Keep the existing GraphQL path for jobs.gem.com SPA boards, while
+    // allowing operators to pin a verified REST URL from a captured page.
+    const restApiUrl = resolveRestApiUrl(entry);
+    if (restApiUrl) {
+      assertGemUrl(restApiUrl.href);
+      const json = /** @type {any} */ (await ctx.fetchJson(restApiUrl.href, { redirect: 'error' }));
+      return parseRestResponse(json, entry.name);
+    }
     const boardId = resolveBoardId(entry);
     if (!boardId) throw new Error(`gem: cannot derive board id for ${entry.name}`);
     assertGemUrl(GEM_API_URL);
@@ -219,3 +253,37 @@ export default {
     }));
   },
 };
+
+/**
+ * Parse Gem's documented GET response.  The endpoint has appeared both as a
+ * bare array and wrapped in `job_posts`; accepting both keeps the provider
+ * tolerant without treating an arbitrary object as a posting.
+ * @param {any} json
+ * @param {string} companyName
+ */
+export function parseRestResponse(json, companyName) {
+  const rows = Array.isArray(json) ? json : (Array.isArray(json?.job_posts) ? json.job_posts : []);
+  return rows.filter(j => j && typeof j.title === 'string' && j.title.trim() && typeof j.absolute_url === 'string')
+    .map(j => {
+      let url;
+      try {
+        const parsed = new URL(j.absolute_url);
+        if (parsed.protocol !== 'https:' || parsed.hostname !== 'jobs.gem.com') return null;
+        url = parsed.href;
+      } catch {
+        return null;
+      }
+      const description = typeof j.content_plain === 'string' && j.content_plain.trim()
+        ? j.content_plain.trim()
+        : htmlToText(j.content);
+      const postedAt = toEpochMs(j.first_published_at);
+      return {
+        title: j.title.trim(),
+        url,
+        company: companyName,
+        location: formatLocation(j.location),
+        ...(description ? { description } : {}),
+        ...(postedAt ? { postedAt } : {}),
+      };
+    }).filter(Boolean);
+}

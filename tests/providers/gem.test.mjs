@@ -14,6 +14,7 @@ console.log('\nProvider — gem');
 try {
   const gemModule = await import(pathToFileURL(join(ROOT, 'providers/gem.mjs')).href);
   const gem = gemModule.default;
+  const { parseRestResponse } = gemModule;
 
   if (gem.id === 'gem') pass('gem.id is "gem"');
   else fail(`gem.id is ${JSON.stringify(gem.id)}`);
@@ -38,6 +39,58 @@ try {
     pass('gem.detect() returns null for missing / null / non-string careers_url');
   } else {
     fail('gem.detect() should return null when careers_url is absent or non-string');
+  }
+
+  // The documented REST endpoint is supported when an operator pins the
+  // exact vanity path discovered from the employer's public careers page.
+  const restHit = gem.detect({
+    name: 'Gem REST',
+    api: 'https://api.gem.com/job_board/v0/example-company/job_posts/',
+  });
+  if (restHit?.url === 'https://api.gem.com/job_board/v0/example-company/job_posts/') {
+    pass('gem.detect() accepts an explicitly pinned documented REST Job Board URL');
+  } else {
+    fail(`gem.detect() REST URL = ${JSON.stringify(restHit)}`);
+  }
+  if (gem.detect({ name: 'Spoof', api: 'https://evil.example/job_board/v0/acme/job_posts/' }) === null
+      && gem.detect({ name: 'Wrong path', api: 'https://api.gem.com/v0/acme/jobs' }) === null) {
+    pass('gem.detect() rejects REST URLs with an untrusted host or path');
+  } else {
+    fail('gem.detect() must reject untrusted REST URLs');
+  }
+  const restRows = parseRestResponse([
+    {
+      title: 'Instructional Designer',
+      absolute_url: 'https://jobs.gem.com/example-company/123',
+      location: { name: 'Toronto, Canada' },
+      first_published_at: '2026-09-01T10:00:00Z',
+      content_plain: 'Design learning experiences & enable teams.',
+      requisition_id: 'REQ-123',
+    },
+    { title: 'Bad URL', absolute_url: 'https://evil.example/jobs/2' },
+    { title: '', absolute_url: 'https://jobs.gem.com/example-company/3' },
+  ], 'Gem REST');
+  if (restRows.length === 1
+      && restRows[0].title === 'Instructional Designer'
+      && restRows[0].location === 'Toronto, Canada'
+      && restRows[0].description === 'Design learning experiences & enable teams.'
+      && restRows[0].postedAt === Date.parse('2026-09-01T10:00:00Z')) {
+    pass('parseRestResponse() normalizes title, canonical jobs.gem.com URL, location, description, and publication date');
+  } else {
+    fail(`parseRestResponse() = ${JSON.stringify(restRows)}`);
+  }
+
+  let restUrl = null;
+  let restOptions = null;
+  const fetchedRest = await gem.fetch(
+    { name: 'Gem REST', api: 'https://api.gem.com/job_board/v0/example-company/job_posts/' },
+    { fetchJson: async (url, opts) => { restUrl = url; restOptions = opts; return [{ title: 'Role', absolute_url: 'https://jobs.gem.com/example-company/1' }]; } },
+  );
+  if (restUrl === 'https://api.gem.com/job_board/v0/example-company/job_posts/'
+      && restOptions?.redirect === 'error' && fetchedRest.length === 1) {
+    pass('gem.fetch() reads the pinned REST endpoint with redirect:"error" and makes one request');
+  } else {
+    fail(`gem.fetch() REST url=${JSON.stringify(restUrl)} opts=${JSON.stringify(restOptions)} rows=${JSON.stringify(fetchedRest)}`);
   }
 
   // js/incomplete-url-substring-sanitization — a raw regex/substring match
