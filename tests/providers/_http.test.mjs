@@ -6,7 +6,7 @@ import { pathToFileURL } from 'url';
 
 console.log('\nProvider — _http retry helpers');
 
-const { isRetryableError, isRefusedRedirectError, fetchJsonWithRetry, fetchResponse, sleep } =
+const { isRetryableError, isRefusedRedirectError, fetchJsonWithRetry, fetchResponse, fetchResponseWithRetry, sleep } =
   await import(pathToFileURL(join(ROOT, 'providers/_http.mjs')).href);
 
 // isRetryableError() — status-based classification.
@@ -268,5 +268,56 @@ if (isRefusedRedirectError(transportFailure) === false) {
     pass('sleep() ignores a non-function ctx.sleep and takes the fallback');
   } catch (e) {
     fail(`sleep() with a non-function ctx.sleep threw: ${e.message}`);
+  }
+}
+
+// ── fetchResponseWithRetry() ────────────────────────────────────────────────
+// Same policy as fetchJsonWithRetry, over ctx.fetchResponse instead of
+// ctx.fetchJson — added for peoplesoft.mjs, which needs Set-Cookie off a
+// retried request, not just the parsed body.
+{
+  let calls = 0;
+  const okResponse = new Response('<html></html>', { status: 200 });
+  const ctx = {
+    fetchResponse: async () => {
+      calls++;
+      if (calls < 3) {
+        const err = new Error('HTTP 503 Service Unavailable');
+        err.status = 503;
+        throw err;
+      }
+      return okResponse;
+    },
+    sleep: async () => {},
+  };
+  const res = await fetchResponseWithRetry(ctx, 'https://example.com/psc/x', {}, { retries: 3, baseDelayMs: 1, maxDelayMs: 10 });
+  if (res === okResponse && calls === 3) {
+    pass('fetchResponseWithRetry() retries a 5xx and returns the eventual successful Response');
+  } else {
+    fail(`fetchResponseWithRetry() retry: calls=${calls}, res===okResponse=${res === okResponse}`);
+  }
+}
+
+{
+  // A non-retryable status (403) must not be retried at all.
+  let calls = 0;
+  const ctx = {
+    fetchResponse: async () => {
+      calls++;
+      const err = new Error('HTTP 403 Forbidden');
+      err.status = 403;
+      throw err;
+    },
+    sleep: async () => {},
+  };
+  try {
+    await fetchResponseWithRetry(ctx, 'https://example.com/psc/x', {}, { retries: 3, baseDelayMs: 1, maxDelayMs: 10 });
+    fail('fetchResponseWithRetry() should rethrow on a 403');
+  } catch (e) {
+    if (calls === 1 && e?.status === 403) {
+      pass('fetchResponseWithRetry() does not retry a 403 (non-transient)');
+    } else {
+      fail(`fetchResponseWithRetry() 403 handling wrong: calls=${calls}, status=${e?.status}`);
+    }
   }
 }
