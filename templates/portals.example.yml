@@ -207,10 +207,6 @@
 # trust_filter:
 #   enabled: true
 
-- name: Ratehub
-  careers_url: https://ratehubinc.applytojob.com/apply
-  provider: jazzhr
-  enabled: false
 #   suspicious_domains:
 #     - "bit.ly"
 #     - "tinyurl.com"
@@ -1537,6 +1533,11 @@ search_queries:
 #     aggregator: true
 
 tracked_companies:
+
+  - name: Ratehub
+    careers_url: https://ratehubinc.applytojob.com/apply
+    provider: jazzhr
+    enabled: false
 
   # -- AI Labs & LLM providers --
 
