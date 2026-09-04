@@ -155,7 +155,10 @@ if (existsSync(PATHS.profileYml)) {
         if (primaryDir) {
           console.warn(`⚠️   No matching evaluation file found in ${primaryDir}; using default modes/oferta.md`);
         }
-        modesDirs = ['modes', ...extras.filter((dir) => dir !== 'modes')];
+        // The primary may still have useful _shared.md context even when its
+        // evaluation file is missing. Keep it after the default evaluation
+        // directory, then append valid secondary markets.
+        modesDirs = ['modes', ...(primaryDir && primaryDir !== 'modes' ? [primaryDir] : []), ...extras.filter((dir) => dir !== 'modes' && dir !== primaryDir)];
       }
       // else: resolveModesDirCandidate(primaryRaw) already warned why the
       // primary itself could not be resolved; falling through to the default
@@ -206,6 +209,7 @@ if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
   EXAMPLES
     node gemini-eval.mjs "We are looking for a Senior AI Engineer..."
     node gemini-eval.mjs --file ./jds/openai-swe.txt
+    node gemini-eval.mjs --context-only --file ./jds/openai-swe.txt  # print context budget without calling Gemini
 `);
   process.exit(0);
 }
