@@ -214,7 +214,7 @@ const NON_CONTENT_MARKERS = [
   {
     category: 'login-wall',
     reason: 'looks like a sign-in/login wall, not a posting',
-    re: /(sign in to view this job|join linkedin to see who you know at|please log in|sign in to continue)/i,
+    re: /(sign in to view this job|join linkedin to see who you know at|please log in to continue|sign in to continue)/i,
   },
   {
     category: '404-shell',
@@ -528,7 +528,15 @@ function runSelfTest() {
     'hasEmbeddedJdArchive rejects a LinkedIn-style login-wall shell even though it clears MIN_ARCHIVE_CHARS by length alone (#3829)');
   check(!hasEmbeddedJdArchive(
     '## Job Description (archived verbatim)\n\nPlease log in to continue. You must sign in to view this content and manage your job alerts.\n\n## Machine Summary'),
-    'hasEmbeddedJdArchive rejects a generic "please log in" auth-wall shell (#3829)');
+    'hasEmbeddedJdArchive rejects a generic "please log in to continue" auth-wall shell (#3829)');
+  // CodeRabbit review on #3837: a bare "please log in" alternative (with no
+  // "to continue"/"to view" qualifier) was too broad and matched legitimate
+  // JD prose instructing the eventual HIRE to log in to an internal system —
+  // narrowed to the full "please log in to continue" phrase. Regression test
+  // for the exact false-positive shape CodeRabbit flagged.
+  check(hasEmbeddedJdArchive(
+    '## Job Description (archived verbatim)\n\nThis role manages our online course catalog. Please log in to our internal LMS after onboarding to review the current curriculum before your first day.\n\n## Machine Summary'),
+    'hasEmbeddedJdArchive does not false-positive on real JD prose containing a bare "Please log in" instruction unrelated to the archive itself being a login wall (CodeRabbit, PR #3837)');
   check(!hasEmbeddedJdArchive(
     '## Job Description (archived verbatim)\n\n404 Not Found. The page you requested could not be located on this server.\n\n## Machine Summary'),
     'hasEmbeddedJdArchive rejects a 404 error shell (#3829)');
