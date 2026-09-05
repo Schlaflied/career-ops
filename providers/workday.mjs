@@ -155,8 +155,39 @@ export function trueTotalFromFacets(facets) {
  *
  * Exported for the test suite.
  */
-export function chooseSplitFacet(facets, { exclude = [] } = {}) {
+function normalizedHintValues(values) {
+  return (Array.isArray(values) ? values : [])
+    .filter((value) => typeof value === 'string' && value.trim())
+    .map((value) => value.trim().toLowerCase());
+}
+
+function facetLooksLikeLocation(facet) {
+  const identity = `${facet?.facetParameter || ''} ${facet?.descriptor || ''}`.toLowerCase();
+  return /location|country|region|state|province|city|remote|geography|geo/.test(identity);
+}
+
+function locationValueScore(value, hints) {
+  const text = String(value?.descriptor || '').trim().toLowerCase();
+  if (!text) return -1;
+  const alwaysAllow = normalizedHintValues(hints?.always_allow);
+  const allow = normalizedHintValues([...(hints?.allow || []), ...(hints?.positive || [])]);
+  const block = normalizedHintValues([...(hints?.block || []), ...(hints?.block_hard || [])]);
+  if (block.some((term) => text.includes(term)) && !alwaysAllow.some((term) => text.includes(term))) return -1;
+  if (alwaysAllow.some((term) => text.includes(term))) return 3;
+  if (allow.some((term) => text.includes(term))) return 2;
+  return 0;
+}
+
+/**
+ * Pick a facet to split a clamped board on, preferring user-configured
+ * locations when the caller supplies location_filter hints. A matching
+ * location value may be the only useful slice (for example, Toronto among
+ * dozens of US cities), so the location-aware path may return one value while
+ * the generic fallback retains the historical two-value partition rule.
+ */
+export function chooseSplitFacet(facets, { exclude = [], locationHints } = {}) {
   const skip = new Set(exclude);
+  const candidates = [];
   let best = null;
   for (const facet of Array.isArray(facets) ? facets : []) {
     const facetParameter = facet?.facetParameter;
@@ -165,12 +196,32 @@ export function chooseSplitFacet(facets, { exclude = [] } = {}) {
       (v) => typeof v?.id === 'string' && v.id && Number.isInteger(v?.count) && v.count >= 0,
     );
     if (values.length < 2) continue;
+    candidates.push({ facet, values });
     const largest = Math.max(...values.map((v) => v.count));
     // Tie-break on value count: a finer partition leaves less to re-split.
     if (best === null || largest < best.largest || (largest === best.largest && values.length > best.values.length)) {
       best = { facetParameter, values, largest };
     }
   }
+
+  if (locationHints && typeof locationHints === 'object') {
+    const locationCandidates = candidates
+      .filter(({ facet }) => facetLooksLikeLocation(facet))
+      .map(({ facet, values }) => ({
+        facetParameter: facet.facetParameter,
+        values: values
+          .map((value) => ({ value, score: locationValueScore(value, locationHints) }))
+          .filter(({ score }) => score > 0)
+          .sort((a, b) => b.score - a.score || b.value.count - a.value.count)
+          .map(({ value }) => value),
+      }))
+      .filter(({ values }) => values.length > 0);
+    if (locationCandidates.length > 0) {
+      locationCandidates.sort((a, b) => b.values.length - a.values.length);
+      return locationCandidates[0];
+    }
+  }
+
   return best ? { facetParameter: best.facetParameter, values: best.values } : null;
 }
 
@@ -552,7 +603,10 @@ export default {
         if (!result.clamped) return;
 
         if (depth >= MAX_SPLIT_DEPTH) { splitIncomplete = true; return; }
-        const facet = chooseSplitFacet(result.facets, { exclude: excluded });
+        const facet = chooseSplitFacet(result.facets, {
+          exclude: excluded,
+          locationHints: ctx?.locationHints,
+        });
         if (!facet) { splitIncomplete = true; return; }
 
         for (const value of facet.values) {

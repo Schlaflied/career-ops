@@ -136,6 +136,33 @@ try {
     fail('chooseSplitFacet() should reject id-less facet values');
   }
 
+  const locationFirst = chooseSplitFacet([
+    { facetParameter: 'jobFamily', descriptor: 'Job Family', values: [{ id: 'admin', count: 10 }, { id: 'ops', count: 20 }] },
+    { facetParameter: 'location', descriptor: 'Location', values: [
+      { id: 'us', descriptor: 'Remote - United States', count: 4000 },
+      { id: 'toronto', descriptor: 'Toronto, Ontario, Canada', count: 20 },
+      { id: 'london', descriptor: 'London, Ontario, Canada', count: 10 },
+    ] },
+  ], { locationHints: { allow: ['Canada', 'Ontario', 'Toronto', 'Remote'], block: ['Remote - United States'] } });
+  if (locationFirst?.facetParameter === 'location'
+      && locationFirst.values.map((value) => value.id).join('|') === 'toronto|london') {
+    pass('chooseSplitFacet() prioritizes configured location values over smaller unrelated facets');
+  } else {
+    fail(`chooseSplitFacet(location hints) returned ${JSON.stringify(locationFirst)}`);
+  }
+
+  const oneTarget = chooseSplitFacet([
+    { facetParameter: 'location', descriptor: 'Location', values: [
+      { id: 'us', descriptor: 'United States', count: 9000 },
+      { id: 'ca', descriptor: 'Toronto, Canada', count: 20 },
+    ] },
+  ], { locationHints: { allow: ['Canada'], block: ['United States'] } });
+  if (oneTarget?.values.length === 1 && oneTarget.values[0].id === 'ca') {
+    pass('chooseSplitFacet() can select one in-scope location slice when other values are excluded');
+  } else {
+    fail(`chooseSplitFacet(single target) returned ${JSON.stringify(oneTarget)}`);
+  }
+
 } catch (e) {
   fail(`workday facet-split tests crashed: ${e.message}`);
 }

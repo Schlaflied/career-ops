@@ -748,7 +748,13 @@ async function main() {
   // here for the user to edit, so "raise max_pages on this entry" would be
   // inactionable. It used to infer that from sinceMs being set, which stopped
   // being true once #2418 taught scan.mjs --since to set it too (#2495).
-  const ctx = { ...makeHttpCtx(), sinceMs: cutoff, includeUndated: opts.includeUndated, syntheticEntries: true };
+  const ctx = {
+    ...makeHttpCtx(),
+    sinceMs: cutoff,
+    includeUndated: opts.includeUndated,
+    syntheticEntries: true,
+    locationHints: config?.location_filter,
+  };
   // The LOCAL calendar day, not the UTC one. This value lands in
   // scan-history.tsv's first_seen, which shouldDedupScanHistoryRow measures the
   // recheck window against using the local day (#3070). Stamping it in UTC put

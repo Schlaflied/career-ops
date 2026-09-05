@@ -2792,7 +2792,12 @@ async function main() {
     // postings on later pages go unfetched. Documented in modes/scan.md; the
     // fix belongs in workday.mjs, where closing it costs the optimisation on
     // every tenant that mixes.
-    const ctx = { ...makeHttpCtx(), sinceMs: earlyStopSinceMs, includeUndated: true };
+    const ctx = {
+      ...makeHttpCtx(),
+      sinceMs: earlyStopSinceMs,
+      includeUndated: true,
+      locationHints: config.location_filter,
+    };
     let sourceName = provider.id === 'local-parser' ? 'local-parser' : `${provider.id}-api`;
     try {
       let jobs;
