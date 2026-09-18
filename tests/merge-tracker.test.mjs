@@ -481,7 +481,7 @@ try {
     '| 1 | 2026-01-01 | Acme | Administrative Assistant | 3.5/5 | Applied | ✅ | ' +
     '[1](reports/001-acme-2026-01-01.md) | req ADMIN-1001, first posting |\n';
   const oneSidedReverse = runMergeDetailed({
-    '001-acme.tsv': '1\t2026-01-15\tAcme\tAdministrative Assistant\tEvaluated\t3.9/5\t✅\t[1](reports/001-acme-2026-01-01.md)\tre-scored, JD refreshed\n',
+    '002-acme.tsv': '2\t2026-01-15\tAcme\tAdministrative Assistant\tEvaluated\t3.9/5\t✅\t[2](reports/002-acme-2026-01-15.md)\tre-scored, JD refreshed\n',
   }, { rows: HAS_REQ_ROW });
   const reverseRows = dataRows(oneSidedReverse.tracker);
   if (reverseRows.length === 1 && /3\.9\/5/.test(reverseRows[0]) && /ADMIN-1001/.test(reverseRows[0])) {
@@ -496,7 +496,7 @@ try {
     '| 1 | 2026-01-01 | Acme | Administrative Assistant | 3.5/5 | Applied | ✅ | ' +
     '[1](reports/001-acme-2026-01-01.md) | req ADMIN-4471, first pass |\n';
   const sameReq = runMergeDetailed({
-    '001-acme.tsv': '1\t2026-01-15\tAcme\tAdministrative Assistant\tEvaluated\t4.0/5\t✅\t[1](reports/001-acme-2026-01-01.md)\treq ADMIN-4471, re-scored\n',
+    '002-acme.tsv': '2\t2026-01-15\tAcme\tAdministrative Assistant\tEvaluated\t4.0/5\t✅\t[2](reports/002-acme-2026-01-15.md)\treq ADMIN-4471, re-scored\n',
   }, { rows: SAME_REQ_ROW });
   const sameReqRows = dataRows(sameReq.tracker);
   if (sameReqRows.length === 1 && /4\.0\/5/.test(sameReqRows[0])) {
@@ -512,7 +512,7 @@ try {
     '| 1 | 2026-01-01 | Acme | Administrative Assistant | 3.5/5 | Applied | ✅ | ' +
     '[1](reports/001-acme-2026-01-01.md) | on-site, general admin support |\n';
   const neitherReq = runMergeDetailed({
-    '001-acme.tsv': '1\t2026-01-15\tAcme\tAdministrative Assistant\tEvaluated\t4.0/5\t✅\t[1](reports/001-acme-2026-01-01.md)\tre-scored, still no req number\n',
+    '002-acme.tsv': '2\t2026-01-15\tAcme\tAdministrative Assistant\tEvaluated\t4.0/5\t✅\t[2](reports/002-acme-2026-01-15.md)\tre-scored, still no req number\n',
   }, { rows: NEITHER_REQ_ROW });
   const neitherReqRows = dataRows(neitherReq.tracker);
   if (neitherReqRows.length === 1 && /4\.0\/5/.test(neitherReqRows[0])) {
