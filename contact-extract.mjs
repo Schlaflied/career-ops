@@ -285,15 +285,28 @@ async function main() {
   let company = companyOverride;
   let trackerNum;
 
+  // Company and tracker# must always describe the SAME row. When --tracker
+  // is given, its row is the sole source of truth for company — resolved
+  // here, atomically, rather than letting `company` drift in from a separate
+  // matchCandidates() hit further down (which searches ALL rows off the
+  // email body and has no idea a --tracker override already pinned one).
   if (trackerOverride !== undefined) {
     const trackerNumber = Number(trackerOverride.trim());
-    if (!/^\d+$/.test(trackerOverride.trim()) || !Number.isSafeInteger(trackerNumber)
-      || !apps.some((app) => app.num === trackerNumber)) {
+    const trackerRow = /^\d+$/.test(trackerOverride.trim()) && Number.isSafeInteger(trackerNumber)
+      ? apps.find((app) => app.num === trackerNumber)
+      : undefined;
+    if (!trackerRow) {
       console.error(`Error: --tracker must name an existing tracker row; got "${trackerOverride}"`);
       process.exitCode = 1;
       return;
     }
+    if (companyOverride && companyOverride.trim().toLowerCase() !== trackerRow.company.trim().toLowerCase()) {
+      console.error(`Error: --company "${companyOverride}" does not match tracker #${trackerNumber}'s company "${trackerRow.company}"`);
+      process.exitCode = 1;
+      return;
+    }
     trackerNum = String(trackerNumber);
+    company = trackerRow.company;
   }
 
   if (!company || !trackerNum) {
