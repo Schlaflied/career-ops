@@ -61,6 +61,23 @@ function setupWorkspace() {
   return { dir, trackerFile, contactsFile };
 }
 
+// Two distinct rows for two distinct companies, so a --company/--tracker
+// mismatch (row #12 is Acme, row #34 is Globex) has something real to catch.
+function setupWorkspaceTwoRows() {
+  const dir = tmp('contact-extract-');
+  const dataDir = join(dir, 'data');
+  mkdirSync(dataDir, { recursive: true });
+  const trackerFile = join(dataDir, 'applications.md');
+  const header = '# Applications\n\n| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n|---|---|---|---|---|---|---|---|---|\n';
+  writeFileSync(
+    trackerFile,
+    `${header}| 12 | 2026-06-01 | Acme Inc | Backend Engineer | 4.0/5 | Applied | ❌ | - | |\n`
+    + `| 34 | 2026-06-02 | Globex | Data Analyst | 4.0/5 | Applied | ❌ | - | |\n`,
+  );
+  const contactsFile = join(dataDir, 'contacts.tsv');
+  return { dir, trackerFile, contactsFile };
+}
+
 function writeEmail(dir, { subject = '', from = '', body = '' }) {
   const filePath = join(dir, 'email.txt');
   writeFileSync(filePath, `Subject: ${subject}\nFrom: ${from}\n\n${body}\n`);
@@ -326,8 +343,35 @@ console.log('13. CLI: tracker/follow-ups resolve through CAREER_OPS_ROOT, not th
   check('CAREER_OPS_ROOT-only run auto-matches and writes contacts.tsv under the data root', existsSync(contactsFile), `expected ${contactsFile} to exist`);
   if (existsSync(contactsFile)) {
     const content = readFileSync(contactsFile, 'utf8');
-    check('row attached to the data-root tracker row (#7, Globex)', content.includes('Globex\trecruiter\t\t\tpat@globex.com\t\t7\t') || content.includes('Globex'), content);
+    check('row attached to the data-root tracker row (#7, Globex)', content.includes('Globex\trecruiter\t\t\tpat@globex.com\t\t7\t'), content);
   }
+}
+
+// ---------------------------------------------------------------------------
+console.log('14. CLI: --company and --tracker must describe the same row (#4363 review)');
+{
+  const { dir, trackerFile, contactsFile } = setupWorkspaceTwoRows();
+  const emailFile = writeEmail(dir, {
+    subject: 'Unrelated', from: 'someone@example.com', body: 'No matching keywords here.',
+  });
+
+  // --tracker 34 is Globex; --company names Acme (row #12) instead — a
+  // deliberate mismatch that must be rejected rather than silently writing
+  // Acme's name against Globex's tracker number.
+  const resMismatch = run(trackerFile, contactsFile, [
+    '--file', emailFile, '--yes', '--company', 'Acme Inc', '--tracker', '34',
+  ]);
+  check('conflicting --company/--tracker pair exits 1', resMismatch.status === 1, `status=${resMismatch.status}`);
+  check('conflicting --company/--tracker pair writes nothing', !existsSync(contactsFile));
+
+  // --tracker alone (no --company) must pull the company from that SAME row,
+  // not from whatever matchCandidates() would have guessed off the email body.
+  const resTrackerOnly = run(trackerFile, contactsFile, [
+    '--file', emailFile, '--yes', '--tracker', '34',
+  ]);
+  check('--tracker alone exits 0', resTrackerOnly.status === 0, resTrackerOnly.stderr);
+  const content = existsSync(contactsFile) ? readFileSync(contactsFile, 'utf8') : '';
+  check('--tracker alone pulls company from that row (Globex, not Acme)', content.includes('Globex\trecruiter\t\t\tsomeone@example.com\t\t34\t'), content);
 }
 
 console.log(`\nResults: ${passed} passed, ${failed} failed`);
