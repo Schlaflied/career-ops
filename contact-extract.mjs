@@ -61,7 +61,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import { fileURLToPath } from 'node:url';
 import { renameSyncWithRetry, resolveTrackerPath } from './tracker-utils.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { validateFlags, hasFlag, flagValue } from './lib/cli-flags.mjs';
@@ -70,12 +69,11 @@ import { parseFileInput, collectInteractive } from './paste-reply.mjs';
 import { matchCandidates, classifyReply } from './reply-matcher.mjs';
 import { resolveColumns, parseTrackerRow } from './tracker-parse.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = getCareerOpsRoot();
 const CONTACTS_PATH = process.env.CAREER_OPS_CONTACTS
   || path.join(DATA_ROOT, 'data', 'contacts.tsv');
-const APPS_FILE = resolveTrackerPath(__dirname);
-const FOLLOWUPS_FILE = path.join(__dirname, 'data', 'follow-ups.md');
+const APPS_FILE = resolveTrackerPath(DATA_ROOT);
+const FOLLOWUPS_FILE = path.join(DATA_ROOT, 'data', 'follow-ups.md');
 
 // Kept in sync by hand with contacts.mjs's own VALID_TYPES — both are small,
 // stable enums describing the same TSV column, and contacts.mjs does not
@@ -215,10 +213,18 @@ function loadFollowups(followupsFile = FOLLOWUPS_FILE) {
 
 function askYesNo(query) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => rl.question(query, (ans) => {
-    rl.close();
-    resolve(/^y(es)?$/i.test(ans.trim()));
-  }));
+  return new Promise((resolve) => {
+    let answered = false;
+    // EOF on stdin (piped input that ends without a line) fires 'close'
+    // without ever invoking the question callback below — decline rather
+    // than hang forever waiting for an answer that will never arrive.
+    rl.on('close', () => { if (!answered) resolve(false); });
+    rl.question(query, (ans) => {
+      answered = true;
+      rl.close();
+      resolve(/^y(es)?$/i.test(ans.trim()));
+    });
+  });
 }
 
 function printHelp() {
@@ -234,7 +240,10 @@ override); without one, nothing is written.`);
 
 async function main() {
   const args = process.argv.slice(2);
-  validateFlags(args, KNOWN_FLAGS, USAGE, { valueFlags: ['--file', '--company', '--tracker', '--type'] });
+  validateFlags(args, KNOWN_FLAGS, USAGE, {
+    valueFlags: ['--file', '--company', '--tracker', '--type'],
+    requireOperand: true,
+  });
 
   if (args.includes('--help') || args.includes('-h')) {
     printHelp();
@@ -271,12 +280,23 @@ async function main() {
 
   const companyOverride = flagValue(args, '--company');
   const trackerOverride = flagValue(args, '--tracker');
+  const apps = loadTrackerApps();
 
   let company = companyOverride;
-  let trackerNum = trackerOverride;
+  let trackerNum;
+
+  if (trackerOverride !== undefined) {
+    const trackerNumber = Number(trackerOverride.trim());
+    if (!/^\d+$/.test(trackerOverride.trim()) || !Number.isSafeInteger(trackerNumber)
+      || !apps.some((app) => app.num === trackerNumber)) {
+      console.error(`Error: --tracker must name an existing tracker row; got "${trackerOverride}"`);
+      process.exitCode = 1;
+      return;
+    }
+    trackerNum = String(trackerNumber);
+  }
 
   if (!company || !trackerNum) {
-    const apps = loadTrackerApps();
     const followups = loadFollowups();
     const [match] = matchCandidates([candidate], apps, followups);
     if (match && match.application_num != null) {

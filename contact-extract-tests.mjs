@@ -45,6 +45,11 @@ function tmp(prefix) {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
+// process.env with CAREER_OPS_TRACKER/CAREER_OPS_CONTACTS stripped out, for
+// the one test (#13) that must prove resolution falls back to CAREER_OPS_ROOT
+// rather than piggybacking on either override.
+const { CAREER_OPS_TRACKER: _t, CAREER_OPS_CONTACTS: _c, ...cleanEnv } = process.env;
+
 function setupWorkspace() {
   const dir = tmp('contact-extract-');
   const dataDir = join(dir, 'data');
@@ -246,6 +251,83 @@ console.log('10. CLI: missing --file path / unknown flag / --help');
   check('--help exits 0', resHelp.status === 0, resHelp.stderr);
   check('--help prints usage', resHelp.stdout.includes('Usage:'), resHelp.stdout);
   check('--help writes nothing to contacts.tsv', !existsSync(contactsFile));
+}
+
+// ---------------------------------------------------------------------------
+console.log('11. CLI: --tracker is validated against real tracker rows (#4363 review)');
+{
+  const { dir, trackerFile, contactsFile } = setupWorkspace();
+  const emailFile = writeEmail(dir, {
+    subject: 'Acme Inc — Backend Engineer', from: 'jane@acme.com', body: 'Backend Engineer interview.',
+  });
+
+  const resNonNumeric = run(trackerFile, contactsFile, ['--file', emailFile, '--yes', '--company', 'Acme Inc', '--tracker', 'abc']);
+  check('non-numeric --tracker exits 1', resNonNumeric.status === 1, `status=${resNonNumeric.status}`);
+  check('non-numeric --tracker writes nothing', !existsSync(contactsFile));
+
+  const resNoSuchRow = run(trackerFile, contactsFile, ['--file', emailFile, '--yes', '--company', 'Acme Inc', '--tracker', '999']);
+  check('--tracker naming a row that does not exist exits 1', resNoSuchRow.status === 1, `status=${resNoSuchRow.status}`);
+  check('nonexistent --tracker row writes nothing', !existsSync(contactsFile));
+
+  // --tracker with no operand (next token is itself a flag) is caught by
+  // validateFlags's requireOperand before ever reaching the CLI's own check.
+  const resMissingOperand = run(trackerFile, contactsFile, ['--file', emailFile, '--company', 'Acme Inc', '--tracker', '--yes']);
+  check('--tracker with a flag where its value should be exits 1', resMissingOperand.status === 1, `status=${resMissingOperand.status}`);
+  check('missing --tracker operand writes nothing', !existsSync(contactsFile));
+}
+
+// ---------------------------------------------------------------------------
+console.log('12. CLI: interactive confirm — EOF on stdin declines rather than hanging (#4363 review)');
+{
+  const { dir, trackerFile, contactsFile } = setupWorkspace();
+  const emailFile = writeEmail(dir, {
+    subject: 'Acme Inc — Backend Engineer', from: 'jane@acme.com', body: 'Backend Engineer interview.',
+  });
+
+  // No --yes and no trailing "y\n"/"n\n" — stdin is closed immediately, which
+  // must resolve the confirmation prompt as declined instead of leaving the
+  // process hanging forever on an unresolved promise.
+  const res = run(trackerFile, contactsFile, ['--file', emailFile], '');
+  check('EOF on stdin exits 0 (does not hang)', res.status === 0, res.stderr);
+  check('EOF on stdin declines — nothing saved', !existsSync(contactsFile));
+}
+
+// ---------------------------------------------------------------------------
+console.log('13. CLI: tracker/follow-ups resolve through CAREER_OPS_ROOT, not the code root (#4363 review)');
+{
+  const dataRoot = tmp('contact-extract-dataroot-');
+  const dataDir = join(dataRoot, 'data');
+  mkdirSync(dataDir, { recursive: true });
+  const header = '# Applications\n\n| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n|---|---|---|---|---|---|---|---|---|\n';
+  writeFileSync(join(dataDir, 'applications.md'), `${header}| 7 | 2026-06-01 | Globex | Data Analyst | 4.0/5 | Applied | ❌ | - | |\n`);
+  const contactsFile = join(dataDir, 'contacts.tsv');
+
+  const emailFile = join(dataRoot, 'email.txt');
+  writeFileSync(emailFile, 'Subject: Globex — Data Analyst: interview invitation\nFrom: pat@globex.com\n\nWe would like to invite you to interview for the Data Analyst role.\n');
+
+  // Deliberately CAREER_OPS_ROOT only — no CAREER_OPS_TRACKER, no
+  // CAREER_OPS_CONTACTS override — so the only way this can find
+  // applications.md and write contacts.tsv is by resolving both through the
+  // data root rather than the script's own directory.
+  let res;
+  try {
+    const stdout = execFileSync(NODE, [CLI, '--file', emailFile, '--yes'], {
+      cwd: ROOT,
+      env: { ...cleanEnv, CAREER_OPS_ROOT: dataRoot },
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    res = { status: 0, stdout };
+  } catch (e) {
+    res = { status: e.status, stdout: e.stdout || '', stderr: e.stderr || '' };
+  }
+
+  check('CAREER_OPS_ROOT-only run exits 0', res.status === 0, res.stderr);
+  check('CAREER_OPS_ROOT-only run auto-matches and writes contacts.tsv under the data root', existsSync(contactsFile), `expected ${contactsFile} to exist`);
+  if (existsSync(contactsFile)) {
+    const content = readFileSync(contactsFile, 'utf8');
+    check('row attached to the data-root tracker row (#7, Globex)', content.includes('Globex\trecruiter\t\t\tpat@globex.com\t\t7\t') || content.includes('Globex'), content);
+  }
 }
 
 console.log(`\nResults: ${passed} passed, ${failed} failed`);
