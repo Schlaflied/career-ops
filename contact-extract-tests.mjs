@@ -24,7 +24,7 @@
  * data/applications.md or data/contacts.tsv.
  */
 
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
@@ -98,6 +98,17 @@ function run(trackerFile, contactsFile, args, input) {
   }
 }
 
+function runAsync(trackerFile, contactsFile, args) {
+  const dataRoot = dirname(dirname(contactsFile));
+  return new Promise((resolve) => {
+    execFile(NODE, [CLI, ...args], {
+      cwd: ROOT,
+      env: { ...cleanEnv, CAREER_OPS_ROOT: dataRoot, CAREER_OPS_TRACKER: trackerFile },
+      encoding: 'utf8',
+    }, (error, stdout, stderr) => resolve({ status: error?.code ?? 0, stdout, stderr }));
+  });
+}
+
 // ---------------------------------------------------------------------------
 console.log('1. parseFromHeader / inferContactType / sanitizeCell — direct unit imports');
 {
@@ -127,7 +138,7 @@ console.log('2. appendContact — direct unit import');
 
   const dir1 = tmp('contact-extract-append-');
   const contactsPath1 = join(dir1, 'data', 'contacts.tsv');
-  const total1 = mod.appendContact({ name: 'Jane Doe', company: 'Acme', type: 'recruiter', email: 'jane@acme.com', tracker: '12', notes: 'test' }, contactsPath1);
+  const total1 = await mod.appendContact({ name: 'Jane Doe', company: 'Acme', type: 'recruiter', email: 'jane@acme.com', tracker: '12', notes: 'test' }, contactsPath1);
   check('appendContact: returns 1 on first write', total1 === 1, `got ${total1}`);
   const content1 = readFileSync(contactsPath1, 'utf8');
   check('appendContact: creates header comment line', content1.startsWith('# name\tcompany\ttype\ttitle\tphone\temail\tlinkedin\ttracker\tnotes\n'), content1);
@@ -137,21 +148,29 @@ console.log('2. appendContact — direct unit import');
   const contactsPath2 = join(dir2, 'data', 'contacts.tsv');
   mkdirSync(join(dir2, 'data'), { recursive: true });
   writeFileSync(contactsPath2, '# name\tcompany\ttype\ttitle\tphone\temail\tlinkedin\ttracker\tnotes\nExisting Person\tOldCo\tpeer\t\t\t\t\t-\t\n');
-  const total2 = mod.appendContact({ name: 'Jane Doe', company: 'Acme', type: 'interviewer', email: '', tracker: '-', notes: '' }, contactsPath2);
+  const total2 = await mod.appendContact({ name: 'Jane Doe', company: 'Acme', type: 'interviewer', email: '', tracker: '-', notes: '' }, contactsPath2);
   check('appendContact: returns 2 when one row already existed', total2 === 2, `got ${total2}`);
   const lines2 = readFileSync(contactsPath2, 'utf8').trim().split('\n');
   check('appendContact: unrelated row untouched, new row appended after it', lines2.length === 3 && lines2[1].startsWith('Existing Person') && lines2[2].startsWith('Jane Doe'), lines2.join(' | '));
 
-  const totalAfterUpdate = mod.appendContact({ name: 'Jane Doe', company: 'Acme', type: 'recruiter', email: 'new@acme.com', tracker: '12', notes: 'updated' }, contactsPath2);
+  const totalAfterUpdate = await mod.appendContact({ name: 'Jane Doe', company: 'Acme', type: 'recruiter', email: 'new@acme.com', tracker: '12', notes: 'updated' }, contactsPath2);
   const updatedLines = readFileSync(contactsPath2, 'utf8').trim().split('\n');
   check('appendContact: same name+company updates instead of duplicating', totalAfterUpdate === 2 && updatedLines.length === 3, updatedLines.join(' | '));
   check('appendContact: update replaces supplied fields in place', updatedLines[2].includes('\trecruiter\t\t\tnew@acme.com\t\t12\tupdated'), updatedLines[2]);
 
   const dir3 = tmp('contact-extract-append-');
   const contactsPath3 = join(dir3, 'data', 'contacts.tsv');
-  mod.appendContact({ name: 'Jane\tDoe', company: 'Acme', type: 'recruiter', email: '', tracker: '-', notes: 'line1\nline2' }, contactsPath3);
+  await mod.appendContact({ name: 'Jane\tDoe', company: 'Acme', type: 'recruiter', email: '', tracker: '-', notes: 'line1\nline2' }, contactsPath3);
   const lines3 = readFileSync(contactsPath3, 'utf8').trim().split('\n');
   check('appendContact: tab/newline-bearing fields sanitized to 9 clean cells', lines3.length === 2 && lines3[1].split('\t').length === 9, lines3[1]);
+
+  let missingNameError = '';
+  try {
+    await mod.appendContact({ name: '', company: 'Acme', type: 'recruiter', email: 'only@acme.com' }, join(tmp('contact-extract-name-'), 'data', 'contacts.tsv'));
+  } catch (error) {
+    missingNameError = error.message;
+  }
+  check('appendContact: refuses an empty name before forming the identity key', missingNameError === 'Contact name is required', missingNameError);
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +238,28 @@ console.log('5b. CLI: --company alone constrains tracker matching to that compan
 }
 
 // ---------------------------------------------------------------------------
+console.log('5c. CLI: --company remains constrained when that company has multiple rows');
+{
+  const { dir, trackerFile, contactsFile } = setupWorkspaceTwoRows();
+  const header = '# Applications\n\n| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n|---|---|---|---|---|---|---|---|---|\n';
+  writeFileSync(
+    trackerFile,
+    `${header}| 12 | 2026-06-01 | Acme Inc | Backend Engineer | 4.0/5 | Applied | ❌ | - | |\n`
+    + `| 13 | 2026-06-02 | Acme Inc | Product Designer | 4.0/5 | Applied | ❌ | - | |\n`
+    + `| 34 | 2026-06-03 | Globex | Data Analyst | 4.0/5 | Applied | ❌ | - | |\n`,
+  );
+  const emailFile = writeEmail(dir, {
+    subject: 'Globex — Data Analyst update',
+    from: 'Jane Doe <jane@acme.com>',
+    body: 'An update about the Globex Data Analyst role.',
+  });
+  const res = run(trackerFile, contactsFile, ['--file', emailFile, '--company', 'Acme Inc', '--yes']);
+  check('ambiguous company-only run exits 0', res.status === 0, res.stderr);
+  check('ambiguous company-only run asks for a tracker instead of crossing companies', res.stdout.includes('Could not match this reply to a single tracker row'), res.stdout);
+  check('ambiguous company-only run writes nothing', !existsSync(contactsFile));
+}
+
+// ---------------------------------------------------------------------------
 console.log('6. CLI: --type overrides the inferred type');
 {
   const { dir, trackerFile, contactsFile } = setupWorkspace();
@@ -249,28 +290,46 @@ console.log('7. CLI: unknown --type value exits 1 and writes nothing');
 console.log('8. CLI: interactive confirm — "n" does not save, "y" saves');
 {
   const w1 = setupWorkspace();
-  const emailFile1 = writeEmail(w1.dir, { subject: 'Acme Inc — Backend Engineer', from: 'jane@acme.com', body: 'Backend Engineer interview.' });
+  const emailFile1 = writeEmail(w1.dir, { subject: 'Acme Inc — Backend Engineer', from: 'Jane Doe <jane@acme.com>', body: 'Backend Engineer interview.' });
   const resNo = run(w1.trackerFile, w1.contactsFile, ['--file', emailFile1], 'n\n');
   check('"n": exit 0', resNo.status === 0, resNo.stderr);
   check('"n": nothing saved', !existsSync(w1.contactsFile));
 
   const w2 = setupWorkspace();
-  const emailFile2 = writeEmail(w2.dir, { subject: 'Acme Inc — Backend Engineer', from: 'jane@acme.com', body: 'Backend Engineer interview.' });
+  const emailFile2 = writeEmail(w2.dir, { subject: 'Acme Inc — Backend Engineer', from: 'Jane Doe <jane@acme.com>', body: 'Backend Engineer interview.' });
   const resYes = run(w2.trackerFile, w2.contactsFile, ['--file', emailFile2], 'y\n');
   check('"y": exit 0', resYes.status === 0, resYes.stderr);
   check('"y": saved', existsSync(w2.contactsFile));
 }
 
 // ---------------------------------------------------------------------------
-console.log('9. CLI: neither name nor email parsed — nothing saved even with --yes');
+console.log('9. CLI: a contact name is required even when an email is present');
 {
   const { dir, trackerFile, contactsFile } = setupWorkspace();
-  const emailFile = join(dir, 'email.txt');
-  writeFileSync(emailFile, 'Subject: Acme Inc — Backend Engineer\n\nBackend Engineer interview.\n');
+  const emailFile = writeEmail(dir, { subject: 'Acme Inc — Backend Engineer', from: 'jane@acme.com', body: 'Backend Engineer interview.' });
 
   const res = run(trackerFile, contactsFile, ['--file', emailFile, '--yes']);
   check('exit 0', res.status === 0, res.stderr);
-  check('nothing saved (empty From header)', !existsSync(contactsFile));
+  check('name requirement is explained', res.stdout.includes('No contact name could be parsed'), res.stdout);
+  check('nothing saved (email-only From header)', !existsSync(contactsFile));
+}
+
+// ---------------------------------------------------------------------------
+console.log('9b. CLI: concurrent saves retain both contacts');
+{
+  const { dir, trackerFile, contactsFile } = setupWorkspace();
+  const first = join(dir, 'first.txt');
+  const second = join(dir, 'second.txt');
+  writeFileSync(first, 'Subject: Acme Inc — Backend Engineer\nFrom: Jane Doe <jane@acme.com>\n\nBackend Engineer interview.\n');
+  writeFileSync(second, 'Subject: Acme Inc — Backend Engineer\nFrom: John Roe <john@acme.com>\n\nBackend Engineer interview.\n');
+  const [a, b] = await Promise.all([
+    runAsync(trackerFile, contactsFile, ['--file', first, '--tracker', '12', '--yes']),
+    runAsync(trackerFile, contactsFile, ['--file', second, '--tracker', '12', '--yes']),
+  ]);
+  const content = existsSync(contactsFile) ? readFileSync(contactsFile, 'utf8') : '';
+  check('both concurrent CLI runs exit 0', a.status === 0 && b.status === 0, `${a.stderr}\n${b.stderr}`);
+  check('concurrent save retains Jane', content.includes('Jane Doe\tAcme Inc'), content);
+  check('concurrent save retains John', content.includes('John Roe\tAcme Inc'), content);
 }
 
 // ---------------------------------------------------------------------------
@@ -340,7 +399,7 @@ console.log('13. CLI: tracker/follow-ups resolve through CAREER_OPS_ROOT, not th
   const contactsFile = join(dataDir, 'contacts.tsv');
 
   const emailFile = join(dataRoot, 'email.txt');
-  writeFileSync(emailFile, 'Subject: Globex — Data Analyst: interview invitation\nFrom: pat@globex.com\n\nWe would like to invite you to interview for the Data Analyst role.\n');
+  writeFileSync(emailFile, 'Subject: Globex — Data Analyst: interview invitation\nFrom: Pat Smith <pat@globex.com>\n\nWe would like to invite you to interview for the Data Analyst role.\n');
 
   // Deliberately CAREER_OPS_ROOT only — no CAREER_OPS_TRACKER — so the only
   // way this can find applications.md and write contacts.tsv is by resolving
@@ -371,7 +430,7 @@ console.log('14. CLI: --company and --tracker must describe the same row (#4363 
 {
   const { dir, trackerFile, contactsFile } = setupWorkspaceTwoRows();
   const emailFile = writeEmail(dir, {
-    subject: 'Unrelated', from: 'someone@example.com', body: 'No matching keywords here.',
+    subject: 'Unrelated', from: 'Some One <someone@example.com>', body: 'No matching keywords here.',
   });
 
   // --tracker 34 is Globex; --company names Acme (row #12) instead — a
