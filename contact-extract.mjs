@@ -135,7 +135,12 @@ export function inferContactType(text) {
 /** One TSV cell must never contain a tab or newline — either would shift or
  * split the row. Exported for direct unit testing. */
 export function sanitizeCell(value) {
-  return String(value ?? '').replace(/[\t\r\n]+/g, ' ').trim();
+  const cell = String(value ?? '').replace(/[\t\r\n]+/g, ' ').trim();
+  return /^[=+\-@]/.test(cell) ? `'${cell}` : cell;
+}
+
+function unescapeFormulaCell(value) {
+  return String(value ?? '').replace(/^'(?=[=+\-@])/, '');
 }
 
 /**
@@ -159,7 +164,8 @@ export async function appendContact(contact, contactsPath = CONTACTS_PATH) {
       fs.mkdirSync(path.dirname(contactsPath), { recursive: true });
     }
 
-    const identityPart = (value) => sanitizeCell(value).normalize('NFC').replace(/\s+/g, ' ').toLowerCase();
+    const identityPart = (value) => unescapeFormulaCell(sanitizeCell(value))
+      .normalize('NFC').replace(/\s+/g, ' ').toLowerCase();
     const key = (name, company) => `${identityPart(name)}\0${identityPart(company)}`;
     const incomingKey = key(contact.name, contact.company);
     const existingIndex = lines.findIndex((line) => {
