@@ -60,6 +60,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { resolveTrackerPath, writeFileAtomic } from './tracker-utils.mjs';
+import { withPipelineLock } from './pipeline-lock.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { validateFlags, hasFlag, flagValue } from './lib/cli-flags.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
@@ -145,39 +146,42 @@ export function sanitizeCell(value) {
  * Exported for direct unit testing. Returns the file's total data-row count
  * after the write.
  */
-export function appendContact(contact, contactsPath = CONTACTS_PATH) {
-  const header = '# name\tcompany\ttype\ttitle\tphone\temail\tlinkedin\ttracker\tnotes';
-  let lines = [header];
-  if (fs.existsSync(contactsPath)) {
-    lines = fs.readFileSync(contactsPath, 'utf-8').split(/\r?\n/);
-    if (lines.at(-1) === '') lines.pop();
-    if (!lines.length) lines = [header];
-  } else {
-    fs.mkdirSync(path.dirname(contactsPath), { recursive: true });
-  }
+export async function appendContact(contact, contactsPath = CONTACTS_PATH) {
+  if (!sanitizeCell(contact.name)) throw new Error('Contact name is required');
+  return withPipelineLock(contactsPath, () => {
+    const header = '# name\tcompany\ttype\ttitle\tphone\temail\tlinkedin\ttracker\tnotes';
+    let lines = [header];
+    if (fs.existsSync(contactsPath)) {
+      lines = fs.readFileSync(contactsPath, 'utf-8').split(/\r?\n/);
+      if (lines.at(-1) === '') lines.pop();
+      if (!lines.length) lines = [header];
+    } else {
+      fs.mkdirSync(path.dirname(contactsPath), { recursive: true });
+    }
 
-  const identityPart = (value) => sanitizeCell(value).normalize('NFC').replace(/\s+/g, ' ').toLowerCase();
-  const key = (name, company) => `${identityPart(name)}\0${identityPart(company)}`;
-  const incomingKey = key(contact.name, contact.company);
-  const existingIndex = lines.findIndex((line) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) return false;
-    const cells = line.split('\t');
-    return key(cells[0], cells[1]) === incomingKey;
+    const identityPart = (value) => sanitizeCell(value).normalize('NFC').replace(/\s+/g, ' ').toLowerCase();
+    const key = (name, company) => `${identityPart(name)}\0${identityPart(company)}`;
+    const incomingKey = key(contact.name, contact.company);
+    const existingIndex = lines.findIndex((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return false;
+      const cells = line.split('\t');
+      return key(cells[0], cells[1]) === incomingKey;
+    });
+    const previous = existingIndex >= 0 ? lines[existingIndex].split('\t') : [];
+    const values = [
+      contact.name, contact.company, contact.type || previous[2] || '',
+      contact.title || previous[3] || '', contact.phone || previous[4] || '',
+      contact.email || previous[5] || '', contact.linkedin || previous[6] || '',
+      contact.tracker || previous[7] || '-', contact.notes || previous.slice(8).join(' ') || '',
+    ].map(sanitizeCell);
+    const row = values.join('\t');
+    if (existingIndex >= 0) lines[existingIndex] = row;
+    else lines.push(row);
+
+    writeFileAtomic(contactsPath, `${lines.join('\n')}\n`);
+    return lines.filter((line) => line.trim() && !line.trim().startsWith('#')).length;
   });
-  const previous = existingIndex >= 0 ? lines[existingIndex].split('\t') : [];
-  const values = [
-    contact.name, contact.company, contact.type || previous[2] || '',
-    contact.title || previous[3] || '', contact.phone || previous[4] || '',
-    contact.email || previous[5] || '', contact.linkedin || previous[6] || '',
-    contact.tracker || previous[7] || '-', contact.notes || previous.slice(8).join(' ') || '',
-  ].map(sanitizeCell);
-  const row = values.join('\t');
-  if (existingIndex >= 0) lines[existingIndex] = row;
-  else lines.push(row);
-
-  writeFileAtomic(contactsPath, `${lines.join('\n')}\n`);
-  return lines.filter((line) => line.trim() && !line.trim().startsWith('#')).length;
 }
 
 function loadTrackerApps(appsFile = APPS_FILE) {
@@ -286,6 +290,7 @@ async function main() {
 
   let company;
   let trackerNum;
+  let candidateApps = apps;
 
   // Company and tracker# must always describe the SAME row. When --tracker
   // is given, its row is the sole source of truth for company — resolved
@@ -317,6 +322,7 @@ async function main() {
       process.exitCode = 1;
       return;
     }
+    candidateApps = companyApps;
     const [match] = matchCandidates([candidate], companyApps, loadFollowups());
     const matchedRow = match?.application_num != null
       ? companyApps.find((app) => app.num === match.application_num)
@@ -329,7 +335,7 @@ async function main() {
 
   if (!company || !trackerNum) {
     const followups = loadFollowups();
-    const [match] = matchCandidates([candidate], apps, followups);
+    const [match] = matchCandidates([candidate], candidateApps, followups);
     if (match && match.application_num != null) {
       company = company || match.company_hint;
       trackerNum = trackerNum || String(match.application_num);
@@ -368,8 +374,8 @@ async function main() {
   console.log(`  type:     ${contact.type}`);
   console.log(`  tracker#: ${contact.tracker}`);
 
-  if (!contact.name && !contact.email) {
-    console.log('\nNeither a name nor an email could be parsed from the From header — nothing useful to save.');
+  if (!contact.name) {
+    console.log('\nNo contact name could be parsed from the From header — add a display name before saving. Nothing was written.');
     return;
   }
 
@@ -382,7 +388,7 @@ async function main() {
     }
   }
 
-  const total = appendContact(contact);
+  const total = await appendContact(contact);
   console.log(`\nSaved. data/contacts.tsv now has ${total} contact row(s).`);
 }
 
