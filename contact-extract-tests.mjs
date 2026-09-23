@@ -101,11 +101,17 @@ function run(trackerFile, contactsFile, args, input) {
 function runAsync(trackerFile, contactsFile, args) {
   const dataRoot = dirname(dirname(contactsFile));
   return new Promise((resolve) => {
-    execFile(NODE, [CLI, ...args], {
+    const child = execFile(NODE, [CLI, ...args], {
       cwd: ROOT,
       env: { ...cleanEnv, CAREER_OPS_ROOT: dataRoot, CAREER_OPS_TRACKER: trackerFile },
       encoding: 'utf8',
-    }, (error, stdout, stderr) => resolve({ status: error?.code ?? 0, stdout, stderr }));
+      timeout: 30_000,
+    }, (error, stdout, stderr) => resolve({
+      status: error ? (typeof error.code === 'number' ? error.code : 1) : 0,
+      stdout,
+      stderr,
+    }));
+    child.stdin.end();
   });
 }
 
@@ -129,6 +135,7 @@ console.log('1. parseFromHeader / inferContactType / sanitizeCell — direct uni
 
   check('sanitizeCell strips tabs/newlines, trims', mod.sanitizeCell('  Jane\tDoe\n ') === 'Jane Doe');
   check('sanitizeCell handles null/undefined', mod.sanitizeCell(null) === '' && mod.sanitizeCell(undefined) === '');
+  check('sanitizeCell neutralizes spreadsheet formula prefixes', mod.sanitizeCell('=1+1') === "'=1+1" && mod.sanitizeCell('+cmd') === "'+cmd");
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +178,16 @@ console.log('2. appendContact — direct unit import');
     missingNameError = error.message;
   }
   check('appendContact: refuses an empty name before forming the identity key', missingNameError === 'Contact name is required', missingNameError);
+
+  const formulaPath = join(tmp('contact-extract-formula-'), 'data', 'contacts.tsv');
+  await mod.appendContact({ name: '=Formula Name', company: '@Acme', type: 'recruiter', email: 'safe@example.com', tracker: '12' }, formulaPath);
+  await mod.appendContact({ name: "'=Formula Name", company: "'@Acme", type: 'interviewer', email: 'updated@example.com', tracker: '12' }, formulaPath);
+  const formulaContent = readFileSync(formulaPath, 'utf8');
+  const contactsMod = await import(pathToFileURL(join(ROOT, 'contacts.mjs')).href);
+  const parsedFormula = contactsMod.parseContacts(formulaContent);
+  check('appendContact: formula-leading cells are escaped on disk', formulaContent.includes("'=Formula Name\t'@Acme\t"), formulaContent);
+  check('appendContact: escaped and raw identity forms update one row', parsedFormula.contacts.length === 1, formulaContent);
+  check('contacts reader restores formula-leading values for vCard use', parsedFormula.contacts[0]?.name === '=Formula Name' && parsedFormula.contacts[0]?.company === '@Acme', JSON.stringify(parsedFormula.contacts[0]));
 }
 
 // ---------------------------------------------------------------------------
