@@ -30,7 +30,7 @@
  *   4. Classify the reply (classifyReply) and infer a contact `type`
  *      (recruiter / hiring-manager / interviewer) from the email text.
  *   5. Confirm with the user (or --yes for non-interactive use) before
- *      appending one row to data/contacts.tsv.
+ *      creating or updating one row in data/contacts.tsv.
  *
  * This script NEVER writes to data/applications.md, NEVER sends anything, and
  * NEVER classifies or updates tracker status — same boundary as
@@ -52,16 +52,14 @@
  *
  *   <body text, any number of lines>
  *
- * Env:
- *   CAREER_OPS_CONTACTS  override the output TSV path (used by tests;
- *                        defaults to data/contacts.tsv under the resolved
- *                        career-ops data root, matching contacts.mjs)
+ * The contacts path is always data/contacts.tsv under the resolved career-ops
+ * data root, matching contacts.mjs.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import { renameSyncWithRetry, resolveTrackerPath } from './tracker-utils.mjs';
+import { resolveTrackerPath, writeFileAtomic } from './tracker-utils.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { validateFlags, hasFlag, flagValue } from './lib/cli-flags.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
@@ -70,8 +68,7 @@ import { matchCandidates, classifyReply } from './reply-matcher.mjs';
 import { resolveColumns, parseTrackerRow } from './tracker-parse.mjs';
 
 const DATA_ROOT = getCareerOpsRoot();
-const CONTACTS_PATH = process.env.CAREER_OPS_CONTACTS
-  || path.join(DATA_ROOT, 'data', 'contacts.tsv');
+const CONTACTS_PATH = path.join(DATA_ROOT, 'data', 'contacts.tsv');
 const APPS_FILE = resolveTrackerPath(DATA_ROOT);
 const FOLLOWUPS_FILE = path.join(DATA_ROOT, 'data', 'follow-ups.md');
 
@@ -141,41 +138,46 @@ export function sanitizeCell(value) {
 }
 
 /**
- * Append one contact row to data/contacts.tsv, creating the file (with its
- * documented leading `#` header-comment line) if it doesn't exist yet, and
- * never disturbing existing rows. Write-then-rename, same pattern as
- * paste-reply.mjs's appendCandidate, so a crash mid-write can never leave the
- * real file truncated or corrupted.
+ * Create or update one contact row in data/contacts.tsv. Existing contacts are
+ * matched by case-insensitive name + company, the same identity used by the
+ * contacto workflow. Empty incoming optional fields preserve saved details.
  *
  * Exported for direct unit testing. Returns the file's total data-row count
- * after the append.
+ * after the write.
  */
 export function appendContact(contact, contactsPath = CONTACTS_PATH) {
-  const row = [
-    contact.name, contact.company, contact.type, contact.title || '',
-    contact.phone || '', contact.email || '', contact.linkedin || '',
-    contact.tracker || '-', contact.notes || '',
-  ].map(sanitizeCell).join('\t');
-
-  let existing = '';
-  let dataRows = 0;
+  const header = '# name\tcompany\ttype\ttitle\tphone\temail\tlinkedin\ttracker\tnotes';
+  let lines = [header];
   if (fs.existsSync(contactsPath)) {
-    existing = fs.readFileSync(contactsPath, 'utf-8');
-    for (const line of existing.split('\n')) {
-      const t = line.trim();
-      if (t && !t.startsWith('#')) dataRows++;
-    }
-    if (existing && !existing.endsWith('\n')) existing += '\n';
+    lines = fs.readFileSync(contactsPath, 'utf-8').split(/\r?\n/);
+    if (lines.at(-1) === '') lines.pop();
+    if (!lines.length) lines = [header];
   } else {
     fs.mkdirSync(path.dirname(contactsPath), { recursive: true });
-    existing = '# name\tcompany\ttype\ttitle\tphone\temail\tlinkedin\ttracker\tnotes\n';
   }
 
-  const updated = `${existing}${row}\n`;
-  const tmpPath = `${contactsPath}.tmp`;
-  fs.writeFileSync(tmpPath, updated, 'utf-8');
-  renameSyncWithRetry(tmpPath, contactsPath);
-  return dataRows + 1;
+  const identityPart = (value) => sanitizeCell(value).normalize('NFC').replace(/\s+/g, ' ').toLowerCase();
+  const key = (name, company) => `${identityPart(name)}\0${identityPart(company)}`;
+  const incomingKey = key(contact.name, contact.company);
+  const existingIndex = lines.findIndex((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return false;
+    const cells = line.split('\t');
+    return key(cells[0], cells[1]) === incomingKey;
+  });
+  const previous = existingIndex >= 0 ? lines[existingIndex].split('\t') : [];
+  const values = [
+    contact.name, contact.company, contact.type || previous[2] || '',
+    contact.title || previous[3] || '', contact.phone || previous[4] || '',
+    contact.email || previous[5] || '', contact.linkedin || previous[6] || '',
+    contact.tracker || previous[7] || '-', contact.notes || previous.slice(8).join(' ') || '',
+  ].map(sanitizeCell);
+  const row = values.join('\t');
+  if (existingIndex >= 0) lines[existingIndex] = row;
+  else lines.push(row);
+
+  writeFileAtomic(contactsPath, `${lines.join('\n')}\n`);
+  return lines.filter((line) => line.trim() && !line.trim().startsWith('#')).length;
 }
 
 function loadTrackerApps(appsFile = APPS_FILE) {
@@ -282,7 +284,7 @@ async function main() {
   const trackerOverride = flagValue(args, '--tracker');
   const apps = loadTrackerApps();
 
-  let company = companyOverride;
+  let company;
   let trackerNum;
 
   // Company and tracker# must always describe the SAME row. When --tracker
@@ -307,6 +309,22 @@ async function main() {
     }
     trackerNum = String(trackerNumber);
     company = trackerRow.company;
+  } else if (companyOverride) {
+    const normalizedCompany = companyOverride.trim().toLowerCase();
+    const companyApps = apps.filter((app) => app.company.trim().toLowerCase() === normalizedCompany);
+    if (!companyApps.length) {
+      console.error(`Error: --company must name a company in the tracker; got "${companyOverride}"`);
+      process.exitCode = 1;
+      return;
+    }
+    const [match] = matchCandidates([candidate], companyApps, loadFollowups());
+    const matchedRow = match?.application_num != null
+      ? companyApps.find((app) => app.num === match.application_num)
+      : companyApps.length === 1 ? companyApps[0] : undefined;
+    if (matchedRow) {
+      company = matchedRow.company;
+      trackerNum = String(matchedRow.num);
+    }
   }
 
   if (!company || !trackerNum) {

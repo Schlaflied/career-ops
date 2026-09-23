@@ -13,14 +13,14 @@
  *   3. sanitizeCell strips tabs/newlines so a TSV row can never be corrupted
  *      by name/notes content.
  *   4. appendContact creates the file with its documented header comment,
- *      appends without disturbing existing rows, and sanitizes on the way in.
+ *      updates name+company matches, and sanitizes on the way in.
  *   5. CLI end to end: auto-match via reply-matcher.mjs's matchCandidates,
  *      manual --company/--tracker override, no-match no-op (nothing written,
  *      exit 0), --type validation, interactive y/n confirm vs --yes,
  *      missing-file / unknown-flag / --help exits.
  *
- * Provisions a throwaway tracker + contacts.tsv via CAREER_OPS_TRACKER /
- * CAREER_OPS_CONTACTS and a temp dir; never touches the repo's real
+ * Provisions a throwaway data root via CAREER_OPS_ROOT and a temp dir; never
+ * touches the repo's real
  * data/applications.md or data/contacts.tsv.
  */
 
@@ -45,10 +45,8 @@ function tmp(prefix) {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
-// process.env with CAREER_OPS_TRACKER/CAREER_OPS_CONTACTS stripped out, for
-// the one test (#13) that must prove resolution falls back to CAREER_OPS_ROOT
-// rather than piggybacking on either override.
-const { CAREER_OPS_TRACKER: _t, CAREER_OPS_CONTACTS: _c, ...cleanEnv } = process.env;
+// process.env with path overrides stripped out for isolated data-root tests.
+const { CAREER_OPS_TRACKER: _t, CAREER_OPS_ROOT: _r, ...cleanEnv } = process.env;
 
 function setupWorkspace() {
   const dir = tmp('contact-extract-');
@@ -85,10 +83,11 @@ function writeEmail(dir, { subject = '', from = '', body = '' }) {
 }
 
 function run(trackerFile, contactsFile, args, input) {
+  const dataRoot = dirname(dirname(contactsFile));
   try {
     const stdout = execFileSync(NODE, [CLI, ...args], {
       cwd: ROOT,
-      env: { ...process.env, CAREER_OPS_TRACKER: trackerFile, CAREER_OPS_CONTACTS: contactsFile },
+      env: { ...cleanEnv, CAREER_OPS_ROOT: dataRoot, CAREER_OPS_TRACKER: trackerFile },
       input,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -141,7 +140,12 @@ console.log('2. appendContact — direct unit import');
   const total2 = mod.appendContact({ name: 'Jane Doe', company: 'Acme', type: 'interviewer', email: '', tracker: '-', notes: '' }, contactsPath2);
   check('appendContact: returns 2 when one row already existed', total2 === 2, `got ${total2}`);
   const lines2 = readFileSync(contactsPath2, 'utf8').trim().split('\n');
-  check('appendContact: existing row untouched, new row appended after it', lines2.length === 3 && lines2[1].startsWith('Existing Person') && lines2[2].startsWith('Jane Doe'), lines2.join(' | '));
+  check('appendContact: unrelated row untouched, new row appended after it', lines2.length === 3 && lines2[1].startsWith('Existing Person') && lines2[2].startsWith('Jane Doe'), lines2.join(' | '));
+
+  const totalAfterUpdate = mod.appendContact({ name: 'Jane Doe', company: 'Acme', type: 'recruiter', email: 'new@acme.com', tracker: '12', notes: 'updated' }, contactsPath2);
+  const updatedLines = readFileSync(contactsPath2, 'utf8').trim().split('\n');
+  check('appendContact: same name+company updates instead of duplicating', totalAfterUpdate === 2 && updatedLines.length === 3, updatedLines.join(' | '));
+  check('appendContact: update replaces supplied fields in place', updatedLines[2].includes('\trecruiter\t\t\tnew@acme.com\t\t12\tupdated'), updatedLines[2]);
 
   const dir3 = tmp('contact-extract-append-');
   const contactsPath3 = join(dir3, 'data', 'contacts.tsv');
@@ -196,6 +200,22 @@ console.log('5. CLI: --company/--tracker override bypasses auto-match');
   check('exit 0', res.status === 0, res.stderr);
   const content = existsSync(contactsFile) ? readFileSync(contactsFile, 'utf8') : '';
   check('override company/tracker used', content.includes('Jane Doe\tAcme Inc\trecruiter\t\t\tjane@acme.com\t\t12\t'), content);
+}
+
+// ---------------------------------------------------------------------------
+console.log('5b. CLI: --company alone constrains tracker matching to that company');
+{
+  const { dir, trackerFile, contactsFile } = setupWorkspaceTwoRows();
+  const emailFile = writeEmail(dir, {
+    subject: 'Globex — Data Analyst update',
+    from: 'Jane Doe <jane@acme.com>',
+    body: 'An update about the Globex Data Analyst role.',
+  });
+  const res = run(trackerFile, contactsFile, ['--file', emailFile, '--company', 'Acme Inc', '--yes']);
+  const content = existsSync(contactsFile) ? readFileSync(contactsFile, 'utf8') : '';
+  check('--company-only run exits 0', res.status === 0, res.stderr);
+  check('--company-only run uses company and tracker from the same row', content.includes('Jane Doe\tAcme Inc\trecruiter\t\t\tjane@acme.com\t\t12\t'), content);
+  check('--company-only run does not attach the Globex tracker row', !content.includes('\t34\t'), content);
 }
 
 // ---------------------------------------------------------------------------
@@ -322,10 +342,9 @@ console.log('13. CLI: tracker/follow-ups resolve through CAREER_OPS_ROOT, not th
   const emailFile = join(dataRoot, 'email.txt');
   writeFileSync(emailFile, 'Subject: Globex — Data Analyst: interview invitation\nFrom: pat@globex.com\n\nWe would like to invite you to interview for the Data Analyst role.\n');
 
-  // Deliberately CAREER_OPS_ROOT only — no CAREER_OPS_TRACKER, no
-  // CAREER_OPS_CONTACTS override — so the only way this can find
-  // applications.md and write contacts.tsv is by resolving both through the
-  // data root rather than the script's own directory.
+  // Deliberately CAREER_OPS_ROOT only — no CAREER_OPS_TRACKER — so the only
+  // way this can find applications.md and write contacts.tsv is by resolving
+  // both through the data root rather than the script's own directory.
   let res;
   try {
     const stdout = execFileSync(NODE, [CLI, '--file', emailFile, '--yes'], {
