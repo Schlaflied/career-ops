@@ -172,7 +172,9 @@ export async function appendContact(contact, contactsPath = CONTACTS_PATH) {
       const cells = line.split('\t');
       return storedKey(cells[0], cells[1]) === incomingKey;
     });
-    const previous = existingIndex >= 0 ? lines[existingIndex].split('\t') : [];
+    const previous = existingIndex >= 0
+      ? lines[existingIndex].split('\t').map(unescapeFormulaCell)
+      : [];
     const values = [
       contact.name, contact.company, contact.type || previous[2] || '',
       contact.title || previous[3] || '', contact.phone || previous[4] || '',
