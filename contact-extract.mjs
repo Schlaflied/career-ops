@@ -67,6 +67,7 @@ import { getCareerOpsRoot } from './path-resolver.mjs';
 import { parseFileInput, collectInteractive } from './paste-reply.mjs';
 import { matchCandidates, classifyReply } from './reply-matcher.mjs';
 import { resolveColumns, parseTrackerRow } from './tracker-parse.mjs';
+import { escapeFormulaCell, unescapeFormulaCell } from './contacts.mjs';
 
 const DATA_ROOT = getCareerOpsRoot();
 const CONTACTS_PATH = path.join(DATA_ROOT, 'data', 'contacts.tsv');
@@ -136,11 +137,7 @@ export function inferContactType(text) {
  * split the row. Exported for direct unit testing. */
 export function sanitizeCell(value) {
   const cell = String(value ?? '').replace(/[\t\r\n]+/g, ' ').trim();
-  return /^[=+\-@]/.test(cell) ? `'${cell}` : cell;
-}
-
-function unescapeFormulaCell(value) {
-  return String(value ?? '').replace(/^'(?=[=+\-@])/, '');
+  return escapeFormulaCell(cell);
 }
 
 /**
@@ -164,15 +161,16 @@ export async function appendContact(contact, contactsPath = CONTACTS_PATH) {
       fs.mkdirSync(path.dirname(contactsPath), { recursive: true });
     }
 
-    const identityPart = (value) => unescapeFormulaCell(sanitizeCell(value))
+    const identityPart = (value, stored = false) => unescapeFormulaCell(stored ? value : sanitizeCell(value))
       .normalize('NFC').replace(/\s+/g, ' ').toLowerCase();
     const key = (name, company) => `${identityPart(name)}\0${identityPart(company)}`;
+    const storedKey = (name, company) => `${identityPart(name, true)}\0${identityPart(company, true)}`;
     const incomingKey = key(contact.name, contact.company);
     const existingIndex = lines.findIndex((line) => {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) return false;
       const cells = line.split('\t');
-      return key(cells[0], cells[1]) === incomingKey;
+      return storedKey(cells[0], cells[1]) === incomingKey;
     });
     const previous = existingIndex >= 0 ? lines[existingIndex].split('\t') : [];
     const values = [

@@ -136,6 +136,7 @@ console.log('1. parseFromHeader / inferContactType / sanitizeCell — direct uni
   check('sanitizeCell strips tabs/newlines, trims', mod.sanitizeCell('  Jane\tDoe\n ') === 'Jane Doe');
   check('sanitizeCell handles null/undefined', mod.sanitizeCell(null) === '' && mod.sanitizeCell(undefined) === '');
   check('sanitizeCell neutralizes spreadsheet formula prefixes', mod.sanitizeCell('=1+1') === "'=1+1" && mod.sanitizeCell('+cmd') === "'+cmd");
+  check('sanitizeCell separately encodes a literal apostrophe before a formula character', mod.sanitizeCell("'=1+1") === "''=1+1");
 }
 
 // ---------------------------------------------------------------------------
@@ -181,13 +182,21 @@ console.log('2. appendContact — direct unit import');
 
   const formulaPath = join(tmp('contact-extract-formula-'), 'data', 'contacts.tsv');
   await mod.appendContact({ name: '=Formula Name', company: '@Acme', type: 'recruiter', email: 'safe@example.com', tracker: '12' }, formulaPath);
-  await mod.appendContact({ name: "'=Formula Name", company: "'@Acme", type: 'interviewer', email: 'updated@example.com', tracker: '12' }, formulaPath);
+  await mod.appendContact({ name: '=Formula Name', company: '@Acme', type: 'interviewer', email: 'updated@example.com', tracker: '12' }, formulaPath);
   const formulaContent = readFileSync(formulaPath, 'utf8');
   const contactsMod = await import(pathToFileURL(join(ROOT, 'contacts.mjs')).href);
   const parsedFormula = contactsMod.parseContacts(formulaContent);
   check('appendContact: formula-leading cells are escaped on disk', formulaContent.includes("'=Formula Name\t'@Acme\t"), formulaContent);
   check('appendContact: escaped and raw identity forms update one row', parsedFormula.contacts.length === 1, formulaContent);
   check('contacts reader restores formula-leading values for vCard use', parsedFormula.contacts[0]?.name === '=Formula Name' && parsedFormula.contacts[0]?.company === '@Acme', JSON.stringify(parsedFormula.contacts[0]));
+
+  const literalPath = join(tmp('contact-extract-literal-apostrophe-'), 'data', 'contacts.tsv');
+  await mod.appendContact({ name: "'=Literal Name", company: "'@Literal Co", type: 'recruiter', email: 'literal@example.com', tracker: '12' }, literalPath);
+  const literalContent = readFileSync(literalPath, 'utf8');
+  const parsedLiteral = contactsMod.parseContacts(literalContent);
+  check('appendContact: literal apostrophes use a distinct on-disk encoding', literalContent.includes("''=Literal Name\t''@Literal Co\t"), literalContent);
+  check('contacts reader preserves literal apostrophes before formula characters', parsedLiteral.contacts[0]?.name === "'=Literal Name" && parsedLiteral.contacts[0]?.company === "'@Literal Co", JSON.stringify(parsedLiteral.contacts[0]));
+  check('formula and literal-apostrophe values remain distinct identities', parsedLiteral.contacts[0]?.name !== parsedFormula.contacts[0]?.name);
 }
 
 // ---------------------------------------------------------------------------
