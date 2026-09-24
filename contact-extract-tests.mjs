@@ -137,6 +137,7 @@ console.log('1. parseFromHeader / inferContactType / sanitizeCell — direct uni
   check('sanitizeCell handles null/undefined', mod.sanitizeCell(null) === '' && mod.sanitizeCell(undefined) === '');
   check('sanitizeCell neutralizes spreadsheet formula prefixes', mod.sanitizeCell('=1+1') === "'=1+1" && mod.sanitizeCell('+cmd') === "'+cmd");
   check('sanitizeCell separately encodes a literal apostrophe before a formula character', mod.sanitizeCell("'=1+1") === "''=1+1");
+  check('sanitizeCell preserves arbitrary leading apostrophe runs', mod.sanitizeCell("''=1+1") === "'''=1+1");
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +198,18 @@ console.log('2. appendContact — direct unit import');
   check('appendContact: literal apostrophes use a distinct on-disk encoding', literalContent.includes("''=Literal Name\t''@Literal Co\t"), literalContent);
   check('contacts reader preserves literal apostrophes before formula characters', parsedLiteral.contacts[0]?.name === "'=Literal Name" && parsedLiteral.contacts[0]?.company === "'@Literal Co", JSON.stringify(parsedLiteral.contacts[0]));
   check('formula and literal-apostrophe values remain distinct identities', parsedLiteral.contacts[0]?.name !== parsedFormula.contacts[0]?.name);
+
+  for (const value of ['=Alex', "'=Alex", "''=Alex", "'''=Alex"]) {
+    check(`formula-cell codec round-trips ${JSON.stringify(value)}`, contactsMod.unescapeFormulaCell(contactsMod.escapeFormulaCell(value)) === value);
+  }
+
+  const retainedPath = join(tmp('contact-extract-retained-'), 'data', 'contacts.tsv');
+  await mod.appendContact({ name: 'Retained Person', company: 'Acme', type: 'recruiter', title: '=Lead', phone: '+49 123', email: 'first@example.com', tracker: '12' }, retainedPath);
+  await mod.appendContact({ name: 'Retained Person', company: 'Acme', type: 'interviewer', email: 'second@example.com', tracker: '12' }, retainedPath);
+  const retainedContent = readFileSync(retainedPath, 'utf8');
+  const parsedRetained = contactsMod.parseContacts(retainedContent);
+  check('appendContact: retained optional fields are encoded exactly once', retainedContent.includes("\t'=Lead\t'+49 123\tsecond@example.com\t"), retainedContent);
+  check('appendContact: retained optional fields decode to their original values', parsedRetained.contacts[0]?.title === '=Lead' && parsedRetained.contacts[0]?.phone === '+49 123', JSON.stringify(parsedRetained.contacts[0]));
 }
 
 // ---------------------------------------------------------------------------

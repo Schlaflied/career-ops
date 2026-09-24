@@ -88,14 +88,12 @@ const VALID_TYPES = new Set(['recruiter', 'hiring-manager', 'peer', 'interviewer
 // --- Phonebook parsing (TSV) ---
 export function escapeFormulaCell(value) {
   const cell = String(value ?? '');
-  if (/^'(?=[=+\-@])/.test(cell)) return `'${cell}`;
-  return /^[=+\-@]/.test(cell) ? `'${cell}` : cell;
+  return /^'*[=+\-@]/.test(cell) ? `'${cell}` : cell;
 }
 
 export function unescapeFormulaCell(value) {
   const cell = String(value ?? '');
-  if (/^''(?=[=+\-@])/.test(cell)) return cell.slice(1);
-  return cell.replace(/^'(?=[=+\-@])/, '');
+  return cell.replace(/^'(?='*[=+\-@])/, '');
 }
 
 // line: {name}\t{company}\t{type}\t{title}\t{phone}\t{email}\t{linkedin}\t{tracker#|-}\t{notes}
