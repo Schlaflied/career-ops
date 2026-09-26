@@ -156,10 +156,26 @@ try {
   const jsonLocationResponse = { requisitionList: [
     { jobId: 'loc-1', column: ['Single Location Role', '["AB-Calgary"]', '2026-09-01'] },
     { jobId: 'loc-2', column: ['Multi Location Role', '["AB-Calgary","AB-Edmonton"]', '2026-09-02'] },
-    { jobId: 'loc-3', column: ['Plain Location Role', 'Toronto', '2026-09-03'] },
+    { jobId: 'loc-3', column: ['Empty Location Role', '[]', '2026-09-03'] },
+    { jobId: 'loc-4', column: ['Plain Location Role', 'Toronto', '2026-09-04'] },
   ] };
   const locationJobs = mod.parseTaleoResponse(jsonLocationResponse, { url: new URL(url), section: 'demo' }, mod.extractHeadings(shell), 'Example');
   if (locationJobs[0].location === 'AB-Calgary') pass('parses a single-element JSON location array into plain text'); else fail(`single JSON location array not parsed: ${JSON.stringify(locationJobs[0])}`);
   if (locationJobs[1].location === 'AB-Calgary; AB-Edmonton') pass('joins a multi-element JSON location array with "; "'); else fail(`multi JSON location array not joined: ${JSON.stringify(locationJobs[1])}`);
-  if (locationJobs[2].location === 'Toronto') pass('leaves a plain-string location unchanged'); else fail(`plain location was altered: ${JSON.stringify(locationJobs[2])}`);
+  if (locationJobs[2].location === '') pass('normalizes an empty JSON location array to an empty string'); else fail(`empty JSON location array not normalized: ${JSON.stringify(locationJobs[2])}`);
+  if (locationJobs[3].location === 'Toronto') pass('leaves a plain-string location unchanged'); else fail(`plain location was altered: ${JSON.stringify(locationJobs[3])}`);
+
+  const nullTotalCalls = [];
+  const nullTotal = await provider.fetch({ name: 'NullTotalCo', careers_url: url }, {
+    fetchText: async () => shell,
+    fetchJson: async (u, o) => {
+      const page = JSON.parse(o.body).pageNo;
+      nullTotalCalls.push(page);
+      if (page === 1) return { requisitionList: [{ jobId: 'null-1', column: ['First', 'Toronto', '2026-09-01'] }], pagingData: { totalCount: null } };
+      if (page === 2) return { requisitionList: [{ jobId: 'null-2', column: ['Second', 'London', '2026-09-02'] }], pagingData: { totalCount: '' } };
+      return { requisitionList: [], pagingData: { totalCount: null } };
+    },
+    sleep: async () => {},
+  });
+  if (nullTotal.length === 2 && nullTotalCalls.join(',') === '1,2,3') pass('null and empty totals paginate until an empty page'); else fail(`null-total pagination stopped early: ${nullTotalCalls.join(',')} / ${nullTotal.length}`);
 } catch (e) { fail(`taleo provider tests crashed: ${e.message}`); }

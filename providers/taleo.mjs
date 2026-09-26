@@ -66,7 +66,7 @@ function parseLocationField(value) {
         const parsed = JSON.parse(trimmed);
         if (Array.isArray(parsed) && parsed.every((v) => typeof v === 'string')) {
           const joined = parsed.map((v) => htmlToText(v)).filter(Boolean).join('; ');
-          if (joined) return joined;
+          return joined;
         }
       } catch { /* not valid JSON; fall through to the raw string */ }
     }
@@ -267,7 +267,10 @@ export default {
       all.push(...jobs);
       const rawCount = Array.isArray(json?.requisitionList) ? json.requisitionList.length : 0;
       const paging = json?.pagingData || {};
-      const total = Number(paging.totalCount);
+      const rawTotal = paging.totalCount;
+      const total = rawTotal == null || (typeof rawTotal === 'string' && !rawTotal.trim())
+        ? Number.NaN
+        : Number(rawTotal);
       // Terminate once nothing came back, or once we've accumulated at least
       // as many rows as the source's own reported total. A page returning
       // fewer rows than the assumed/reported pageSize is NOT a reliable
