@@ -25,7 +25,7 @@
 import { intInRange } from './_config-utils.mjs';
 import { decodeEntities } from './_html-entities.mjs';
 import { htmlToText } from './_html-to-text.mjs';
-import { fetchTextWithRetry } from './_http.mjs';
+import { fetchTextWithRetry, sleep } from './_http.mjs';
 
 const FEED_PATH = '/live-jobs.xml';
 const JOB_PATH_RE = /^\/vacancies\/(\d+)\/([^/?#]+)\.html\/?$/i;
@@ -213,12 +213,6 @@ function parseConfig(entry) {
   };
 }
 
-/** @param {number} ms @param {any} ctx */
-async function pace(ms, ctx) {
-  if (typeof ctx?.sleep === 'function') return ctx.sleep(ms);
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /** @type {Provider} */
 export default {
   id: 'eploy',
@@ -259,7 +253,7 @@ export default {
           // Detail lookup is opt-in enrichment. Keep the sitemap row on failure.
         }
       }));
-      if (i + DETAIL_BATCH < candidates.length) await pace(DETAIL_PACE_MS, ctx);
+      if (i + DETAIL_BATCH < candidates.length) await sleep(DETAIL_PACE_MS, ctx);
     }
     return jobs;
   },
