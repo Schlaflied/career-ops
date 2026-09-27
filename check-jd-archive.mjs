@@ -240,7 +240,7 @@ const NON_CONTENT_MARKERS = [
     // These phrases are how the actual interstitial page renders, not a
     // topic a JD would describe.
     reason: 'looks like a bot-verification/challenge page, not a posting',
-    re: /(checking your browser before accessing|verify(?:ing)? you are (?:a )?human|please stand by,? while we (?:are )?check(?:ing)? your browser|cloudflare ray id)/i,
+    re: /(checking your browser before accessing|verify(?:ing)? (?:that )?you are (?:a )?human|please stand by,? while we (?:are )?check(?:ing)? your browser|cloudflare ray id)/i,
   },
 ];
 
