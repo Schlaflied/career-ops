@@ -734,16 +734,23 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
     })();
     await withHostSlot(hostKey, async () => {
       const operation = { active: true };
+      const operationPromise = (async () => {
+        const jobs = await provider.fetch(entry, ctx);
+        if (!operation.active) return;
+        await processJobs(jobs, `${seed.vendor}-history`, provider, entry.name, () => operation.active);
+      })();
       try {
-        await withTimeout((async () => {
-          const jobs = await provider.fetch(entry, ctx);
-          if (!operation.active) return;
-          await processJobs(jobs, `${seed.vendor}-history`, provider, entry.name, () => operation.active);
-        })(), timeoutMs, `${seed.vendor}-history/${entry.name}`, () => { operation.active = false; });
+        await withTimeout(operationPromise, timeoutMs, `${seed.vendor}-history/${entry.name}`, () => { operation.active = false; });
       } catch (err) {
         operation.active = false;
         errors++;
         if (opts.verbose) console.error(`  ✗ ${seed.vendor}-history/${entry.name}: ${err.message}`);
+      } finally {
+        // A timeout invalidates late results, but it cannot force an arbitrary
+        // provider promise to settle. Keep this host slot until the underlying
+        // operation does settle; otherwise six timed-out requests could remain
+        // in flight while the limiter starts six more against the same API.
+        await operationPromise.catch(() => {});
       }
     });
   });

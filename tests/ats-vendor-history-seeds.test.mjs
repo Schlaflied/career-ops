@@ -246,6 +246,34 @@ try {
   assert.ok([...maxByHost.values()].every((peak) => peak <= 6), `per-host peaks: ${JSON.stringify([...maxByHost])}`);
   assert.ok(maxTotal > 6, `different hosts should still overlap; peak was ${maxTotal}`);
   pass('history scanning caps each shared provider host at six while different hosts overlap');
+
+  let pendingActive = 0;
+  let pendingPeak = 0;
+  const pendingProvider = {
+    id: 'lever',
+    detect: () => ({ url: 'mock' }),
+    async fetch() {
+      pendingActive++;
+      pendingPeak = Math.max(pendingPeak, pendingActive);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      pendingActive--;
+      return [];
+    },
+  };
+  const pendingTimeoutRun = await runHistorySeedScan(
+    Array.from({ length: 12 }, (_, i) => ({
+      company: `Pending ${i}`,
+      vendor: 'lever',
+      careersUrl: `https://jobs.lever.co/pending-${i}`,
+    })),
+    new Map([['lever', pendingProvider]]),
+    { atsExplicit: false, ats: [], limit: Infinity, shuffle: false, verbose: false, companyTimeoutMs: 5 },
+    {},
+    async () => {},
+  );
+  assert.equal(pendingTimeoutRun.errors, 12);
+  assert.equal(pendingPeak, 6, 'timed-out but unsettled fetches must keep occupying their host slots');
+  pass('pending fetches retain the host cap after their outer timeout fires');
 } catch (error) {
   fail(`ATS history seed regression: ${error.stack || error.message}`);
 }
