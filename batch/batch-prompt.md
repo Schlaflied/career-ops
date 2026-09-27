@@ -304,7 +304,7 @@ Batch mode limitation: Playwright is not available, so exact apply-button state 
 13. **Pay-Transparency Range-Width Check** — pure arithmetic on the `advertised_comp` already parsed for Block B. Requires both bounds, one explicit and matching currency, an explicit period, and a normalized floor strictly above zero; anything missing or ambiguous → skip rather than guess. Flag when `top - bottom > 0.5 × bottom`, and say plainly that this is a general heuristic on the posting's own numbers, not a jurisdiction's legal threshold.
 14. **Minimum-Wage Lawyer Question** — only for a guaranteed fixed cash amount (never a range, never bonus, commission or benefits), and only when the JD's own stated work location names a jurisdiction — never the candidate's `location`. Convert to an hourly figure using the JD's stated hours, or disclose the 2080-hour fallback; missing hours or currency → skip. Report it as an `[ask your lawyer]` question. Never state, look up or compare a statutory minimum.
 15. **AI-Screening Disclosure** — two independent checks. (a) The JD discloses AI or automated screening: quote it, informational only, never a warning. (b) Corroborating-only, never standalone: the candidate's jurisdiction has a row in `templates/jurisdiction-ai-screening-disclosure.yml` whose condition their `location` string actually satisfies — a borough-level NYC string, not a state-level "New York" — its `effective` date is on or before the posting's own date (or today's date, only when the JD carries no clear date), and the JD shows no disclosure at all. State the statutory fact and the posting's silence side by side; silence is never evidence that disclosure did not happen.
-16. **Fixed-Term Contract Disclosure** — presence-based from JD text only. Flag explicit duration/disclosure wording (`18 month contract`, `6-month contract`, `fixed-term`, `contract position`, `temporary position/role/assignment`, `term position`), quote it, and preserve any stated duration verbatim. A bare "contract" in customer contracts, contract management/law, or contractor-status text does not fire it. Keep this separate from Signal 6. Add a non-scoring note and an optional compensation-conversation prompt covering finite term, benefits, renewal and transition risk; never invent a percentage premium or market benchmark.
+16. **Fixed-Term Contract Disclosure** — presence-based from JD text only. Flag explicit duration/disclosure wording (`18 month contract`, `6-month contract`, `fixed-term`, `fixed-term contract position`, `temporary position/role/assignment`, `term position`), quote it, and preserve any stated duration verbatim. A bare "contract" or unqualified `contract position` in customer contracts, contract management/law, or contractor-status text does not fire it. Keep this separate from Signal 6. Add a non-scoring note and an optional compensation-conversation prompt covering finite term, benefits, renewal and transition risk; never invent a percentage premium or market benchmark.
 
 Signals 1-5 and 7-9 set the tier. Signal 6 is `not evaluated` in batch, so it never feeds the tier either — it stays a descriptive, informational finding, as the Risk Summary already reports. Signals 10-16 never change the tier: report each one separately as its own finding, keep every one of them descriptive rather than assertive, and close them as informational, not legal advice.
 
@@ -339,6 +339,7 @@ Block format:
 | Culture screen | — not evaluated |
 | Interview red flags | — no interview sessions yet |
 | AI claims vs. infrastructure | — not evaluated |
+| Fixed-term contract | ✅ no fixed term disclosed |
 ```
 
 #### Score Global
@@ -501,6 +502,7 @@ risk_summary:
   interview_redflags: "{none | caution | warning | not_evaluated}"
   ai_infra: "{consistent | mismatch | not_evaluated}"
   ai_screening_disclosure: "{disclosed | corroborating_only | no_match | not_evaluated}"
+  fixed_term: "{detected | not_detected | not_evaluated}"
 ```
 ```
 

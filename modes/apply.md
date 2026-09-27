@@ -115,13 +115,13 @@ If a field matches, warn the candidate BEFORE generating or filling an answer fo
 
 ## Step 5e — Fixed-term contract disclosure (#4534)
 
-Before drafting answers, read the matched report's Block G fixed-term finding and any visible JD text. If either explicitly describes the role as fixed-term — for example `18 month contract`, `6-month contract`, `fixed-term`, `contract position`, `temporary position/role/assignment`, or `term position` — surface one reminder before the first answer:
+Before drafting answers, read the matched report's Block G fixed-term finding and any visible JD text. If either explicitly describes the role as fixed-term — for example `18 month contract`, `6-month contract`, `fixed-term`, `fixed-term contract position`, `temporary position/role/assignment`, or `term position` — surface one reminder before the first answer:
 
 > ℹ️ **Fixed-term role reminder:** [Render in {language.output}: quote the exact fixed-term phrase and preserve any stated duration verbatim. State that the role is explicitly time-limited, then suggest confirming renewal expectations, benefits, end-of-term/notice terms, and whether the total package reflects the finite term. If compensation comes up, say only that fixed-term roles can use different compensation structures and that current benchmarks for this market and role should be verified before choosing an anchor.]
 
 **Hard rules:**
 
-- Presence-based only: never infer a fixed term from a bare "contract" used for customer contracts, contract management, contract law, or contractor-status language.
+- Presence-based only: never infer a fixed term from a bare "contract" or unqualified `contract position`, including uses for customer contracts, contract management, contract law, or contractor-status language.
 - Warn once and continue immediately. Never auto-answer or alter a form field, never block or discourage the application, and never require acknowledgment.
 - Never invent a duration, percentage premium, market rate, entitlement, severance/notice rule, or legal conclusion. This is a role-term reminder and a negotiation prompt, not legal advice.
 - If the report already contains the same reminder, do not duplicate its full prose; surface a one-line apply-time reminder with a link/reference to that report section.

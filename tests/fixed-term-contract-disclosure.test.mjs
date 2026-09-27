@@ -19,13 +19,13 @@ const signal = oferta.match(/\*\*16\. Fixed-Term Contract Disclosure\*\*[\s\S]*?
 check('oferta defines standalone Signal 16', Boolean(signal), 'missing Signal 16 section');
 check(
   'signal recognizes explicit fixed-term and duration wording',
-  ['18 month contract', '6-month contract', '2 year contract', 'fixed-term', 'temporary position', 'term position']
+  ['18 month contract', '6-month contract', '2 year contract', 'fixed-term contract position', 'temporary position', 'term position']
     .every((phrase) => signal.includes(phrase)),
   'one or more required explicit examples are absent',
 );
 check(
   'signal rejects unrelated bare contract language',
-  ['customer contracts', 'contract management', 'contract law', 'contractor-status']
+  ['customer contracts', 'contract management', 'contract law', 'contractor-status', 'unqualified `contract position`']
     .every((phrase) => signal.includes(phrase)),
   'false-positive exclusions are incomplete',
 );
@@ -78,6 +78,7 @@ check(
 check(
   'risk and machine summaries expose the fixed-term result',
   oferta.includes('| Fixed-term contract | Fixed-term disclosure signal in Block G (Signal 16) |')
-    && batch.includes('fixed_term: "{detected | not_detected | not_evaluated}"'),
+    && batch.match(/\| Fixed-term contract \|/g)?.length === 2
+    && batch.match(/fixed_term: "\{detected \| not_detected \| not_evaluated\}"/g)?.length === 2,
   'human or machine summary field is missing',
 );
