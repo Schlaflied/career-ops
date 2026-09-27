@@ -1,6 +1,9 @@
 // tests/archive-posting-non-content.test.mjs — archiveUrl() refuses to save a
-// non-content capture (login wall / 404 shell / paywall / JS-required) rather
-// than silently reporting success (#4526).
+// non-content capture (login wall / 404 shell / paywall / JS-required /
+// bot-challenge) rather than silently reporting success (#4526) — while a
+// real, long posting that merely CARRIES one of those phrases incidentally
+// (a sidebar sign-in nudge next to a full JD) is still archived normally,
+// since the marker check is gated on the page being short overall.
 //
 // check-jd-archive.mjs's detectNonContentMarker() already recognizes these
 // shapes, but only at AUDIT time — well after a bad capture is already sitting
@@ -29,7 +32,7 @@ process.env.CAREER_OPS_ROOT = tmp;
 
 const { archiveUrl } = await import('../archive-posting.mjs');
 
-function makeFakeBrowser({ bodyText, title = 'Backend Engineer | Acme', h1 = 'Backend Engineer', httpStatus = 200 }) {
+function makeFakeBrowser({ bodyText, title = 'Backend Engineer | Acme', h1 = 'Backend Engineer', httpStatus = 200, evaluateRejects = false }) {
   let pdfCalled = false;
   const page = {
     _landedUrl: null,
@@ -46,7 +49,14 @@ function makeFakeBrowser({ bodyText, title = 'Backend Engineer | Acme', h1 = 'Ba
     // The fake can't execute page-context code, so it just returns the
     // controlled fixture text — testing archiveUrl()'s reaction to the
     // extracted text is the point here, not Playwright's own extraction.
-    async evaluate() { return bodyText; },
+    // evaluateRejects simulates a real extraction failure (the page
+    // navigating away, a detached frame, etc.) so the test exercises
+    // archiveUrl()'s actual `.catch(() => '')` fallback, not just a fixture
+    // that happens to already be an empty string.
+    async evaluate() {
+      if (evaluateRejects) throw new Error('fake: page.evaluate() failed (simulated extraction failure)');
+      return bodyText;
+    },
     async pdf() { pdfCalled = true; return Buffer.from('%PDF-fake'); },
   };
   const context = {
@@ -93,13 +103,39 @@ test('a real posting is archived normally (control)', async () => {
   assert.ok(jdsFiles().includes(result.filename), 'the file was actually written to jds/');
 });
 
-test('empty body text (extraction failed) is not treated as a false-positive marker', async () => {
-  // page.evaluate()'s own .catch(() => '') fallback in archiveUrl() means an
-  // extraction failure looks identical to an empty page here — neither should
-  // ever match a NON_CONTENT_MARKERS pattern, so this must NOT be refused.
-  const { browser, pdfCalled } = makeFakeBrowser({ bodyText: '' });
+test('a real extraction FAILURE (page.evaluate rejects) falls back to archiving, not refusing', async () => {
+  // archiveUrl()'s `.catch(() => '')` on the evaluate() call means a genuine
+  // extraction failure (page navigated away, detached frame, etc.) is treated
+  // the same as an empty page, not as a non-content marker match — neither
+  // should ever be mistaken for one, so this must NOT be refused.
+  const { browser, pdfCalled } = makeFakeBrowser({ bodyText: 'unused — evaluate() rejects before returning it', evaluateRejects: true });
   await archiveUrl(browser, 'https://boards.greenhouse.io/acme/jobs/4', {});
-  assert.equal(pdfCalled(), true, 'empty extracted text must not be mistaken for a non-content marker');
+  assert.equal(pdfCalled(), true, 'an extraction failure must fall back to archiving, not refuse the page');
+});
+
+test('a bot-challenge (Cloudflare-style) page is refused, not archived', async () => {
+  const { browser, pdfCalled } = makeFakeBrowser({ bodyText: 'Checking your browser before accessing acme.com. This process is automatic. Cloudflare Ray ID: 8f2a1b3c4d5e' });
+  await assert.rejects(
+    () => archiveUrl(browser, 'https://boards.greenhouse.io/acme/jobs/5', {}),
+    /refusing to archive.*bot-verification\/challenge/i,
+  );
+  assert.equal(pdfCalled(), false);
+});
+
+test('a real posting that ALSO carries an incidental "sign in" prompt is still archived (mixed content)', async () => {
+  // The marker check is length-gated specifically so a real, long JD with a
+  // small sidebar/footer sign-in nudge next to it doesn't get refused — only
+  // a page that IS essentially the wall (short, all-marker) should be.
+  const longJd = 'We are looking for a Senior Backend Engineer to join our platform team and own the checkout service end to end. '
+    + 'Requirements: 5+ years of experience with distributed systems, strong knowledge of payment processing, and a track record of shipping reliable services at scale. '
+    + 'You will collaborate with product, design, and other engineering teams to define and deliver features that directly impact millions of customers every day. '
+    + 'We offer competitive compensation, comprehensive benefits, and a hybrid work environment. Apply today to join our growing team. '.repeat(3);
+  const bodyText = `${longJd}\n\nSign in to view this job.`;
+  assert.ok(bodyText.length > 600, 'fixture must actually exercise the long-page path, not accidentally stay short');
+  const { browser, pdfCalled } = makeFakeBrowser({ bodyText });
+  const result = await archiveUrl(browser, 'https://boards.greenhouse.io/acme/jobs/6', {});
+  assert.equal(pdfCalled(), true, 'a real, long posting must not be refused just because it incidentally carries a sign-in prompt');
+  assert.match(result.filename, /\.pdf$/);
 });
 
 process.on('exit', () => rmSync(tmp, { recursive: true, force: true, maxRetries: 5 }));

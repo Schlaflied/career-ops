@@ -43,6 +43,17 @@ const PIPELINE_PATH = join(DATA_ROOT, 'data', 'pipeline.md');
 const KNOWN_FLAGS = ['--company', '--role', '--report', '--pipeline', '--dry-run', '--help', '-h'];
 const VALUE_FLAGS = ['--company', '--role', '--report'];
 
+// A real posting page's rendered text — title, description, requirements,
+// nav/footer boilerplate — is reliably in the thousands of characters. A
+// genuine login-wall/404/paywall/challenge page is typically a couple of
+// sentences. A real posting can still legitimately CARRY one of those phrases
+// incidentally (e.g. a sidebar "sign in to save this job" prompt next to a
+// full JD) — refusing on phrase match alone would then reject a real capture.
+// Gating on total length as well means the marker only fires when the whole
+// page IS essentially the wall, not when a real posting merely mentions one
+// nearby.
+const NON_CONTENT_PAGE_MAX_CHARS = 600;
+
 // ── CLI parsing ──────────────────────────────────────────────────────────────
 
 const HELP_TEXT = `
@@ -368,7 +379,9 @@ export async function archiveUrl(browser, url, { company: companyHint, role: rol
     // the same phrase patterns apply to either, and body innerText is what a
     // login/paywall/404 shell actually renders as its visible content.
     const bodyText = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '');
-    const nonContentMarker = detectNonContentMarker(bodyText);
+    const nonContentMarker = bodyText.length <= NON_CONTENT_PAGE_MAX_CHARS
+      ? detectNonContentMarker(bodyText)
+      : null;
     if (nonContentMarker) {
       throw new Error(`refusing to archive: page ${nonContentMarker.reason}`);
     }
