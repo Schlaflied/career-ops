@@ -103,14 +103,18 @@ test('a real posting is archived normally (control)', async () => {
   assert.ok(jdsFiles().includes(result.filename), 'the file was actually written to jds/');
 });
 
-test('a real extraction FAILURE (page.evaluate rejects) falls back to archiving, not refusing', async () => {
-  // archiveUrl()'s `.catch(() => '')` on the evaluate() call means a genuine
-  // extraction failure (page navigated away, detached frame, etc.) is treated
-  // the same as an empty page, not as a non-content marker match — neither
-  // should ever be mistaken for one, so this must NOT be refused.
+test('a real extraction FAILURE (page.evaluate rejects) fails CLOSED — refuses to archive blind', async () => {
+  // Fail closed, not open: a rejected evaluate() means the page's actual
+  // content is UNKNOWN, not confirmed empty. Coercing that to '' (as an
+  // earlier version of this code did) let a page that genuinely couldn't be
+  // inspected reach page.pdf() anyway — the exact capture-time gap this
+  // whole check exists to close. The error must propagate.
   const { browser, pdfCalled } = makeFakeBrowser({ bodyText: 'unused — evaluate() rejects before returning it', evaluateRejects: true });
-  await archiveUrl(browser, 'https://boards.greenhouse.io/acme/jobs/4', {});
-  assert.equal(pdfCalled(), true, 'an extraction failure must fall back to archiving, not refuse the page');
+  await assert.rejects(
+    () => archiveUrl(browser, 'https://boards.greenhouse.io/acme/jobs/4', {}),
+    /page\.evaluate\(\) failed/,
+  );
+  assert.equal(pdfCalled(), false, 'an extraction failure must not reach page.pdf()');
 });
 
 test('a bot-challenge (Cloudflare-style) page is refused, not archived', async () => {
@@ -133,6 +137,30 @@ test('a bot-challenge page phrased "Verify that you are human" is refused, not a
     /refusing to archive.*bot-verification\/challenge/i,
   );
   assert.equal(pdfCalled(), false, 'a "Verify that you are human" challenge page must never reach page.pdf()');
+});
+
+test('a bot-challenge page phrased "CAPTCHA verification required to continue" is refused, not archived', async () => {
+  // A second real challenge phrasing that names the CAPTCHA mechanism
+  // directly, matched on the specific phrase (not the bare word "captcha")
+  // so a real posting that merely mentions CAPTCHA as a technology (a
+  // security-engineering role's requirements, say) is never mistaken for one.
+  const { browser, pdfCalled } = makeFakeBrowser({ bodyText: 'CAPTCHA verification required to continue.' });
+  await assert.rejects(
+    () => archiveUrl(browser, 'https://boards.greenhouse.io/acme/jobs/8', {}),
+    /refusing to archive.*bot-verification\/challenge/i,
+  );
+  assert.equal(pdfCalled(), false, 'a CAPTCHA-challenge page must never reach page.pdf()');
+});
+
+test('a real posting mentioning CAPTCHA as a technology is NOT mistaken for a challenge page (false-positive guard)', async () => {
+  const longJd = ('We are looking for a Senior Backend Engineer to join our platform team. '
+    + 'Requirements: experience implementing CAPTCHA verification for high-traffic login flows, familiarity with rate limiting and abuse prevention. '
+    + 'You will collaborate with security, product, and other engineering teams to keep our platform safe. '
+    + 'We offer competitive compensation and a hybrid work environment. Apply today to join our growing team. ').repeat(3);
+  assert.ok(longJd.length > 600, 'fixture must exercise the long-page path');
+  const { browser, pdfCalled } = makeFakeBrowser({ bodyText: longJd });
+  await archiveUrl(browser, 'https://boards.greenhouse.io/acme/jobs/9', {});
+  assert.equal(pdfCalled(), true, 'a real JD mentioning CAPTCHA as a topic must not be refused');
 });
 
 test('a real posting that ALSO carries an incidental "sign in" prompt is still archived (mixed content)', async () => {

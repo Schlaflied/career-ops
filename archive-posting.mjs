@@ -378,7 +378,15 @@ export async function archiveUrl(browser, url, { company: companyHint, role: rol
     // not the report-section text detectNonContentMarker was written for —
     // the same phrase patterns apply to either, and body innerText is what a
     // login/paywall/404 shell actually renders as its visible content.
-    const bodyText = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '');
+    // Deliberately NOT `.catch(() => '')` here: an empty string is treated as
+    // "nothing to inspect, proceed" (matches on no marker pattern) — but a
+    // rejected evaluate() means the page's actual content is UNKNOWN, not
+    // confirmed empty. Silently coercing that to "proceed" would let a page
+    // whose content genuinely couldn't be inspected reach page.pdf() without
+    // ever having been checked — a capture-time gap in the exact protection
+    // this block exists to add. Fail closed: propagate the error, refusing
+    // to archive rather than archiving blind.
+    const bodyText = await page.evaluate(() => document.body?.innerText ?? '');
     const nonContentMarker = bodyText.length <= NON_CONTENT_PAGE_MAX_CHARS
       ? detectNonContentMarker(bodyText)
       : null;
