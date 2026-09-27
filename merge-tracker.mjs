@@ -253,15 +253,31 @@ function extractReportNum(reportStr, notesStr = '') {
  * @returns {{url: string, reason: 'ok'|'no-report'|'no-url'}} The URL plus why
  *   it is empty, so the backfill can report the two cases separately.
  */
-function resolveReportUrl(reportField) {
+/**
+ * Resolve a report cell to the absolute path of the report file it links to,
+ * or null when the link is missing, escapes REPORTS_ROOT, or the file doesn't
+ * exist. Factored out of resolveReportUrl() so the merge loop's dedup tiers
+ * can compare two report cells for literal same-file identity (#4506)
+ * without also needing to read and parse the file's `**URL:**` header.
+ *
+ * @param {string} reportField - Report cell, e.g. `[42](reports/042-acme.md)`.
+ * @returns {string|null} The resolved absolute path, or null.
+ */
+function resolveReportPath(reportField) {
   const linkMatch = (reportField || '').match(/\]\(([^)]+)\)/);
-  if (!linkMatch) return { url: '', reason: 'no-report' };
+  if (!linkMatch) return null;
   // Containment, not cosmetics: resolve and assert the path stays under
   // REPORTS_ROOT. Stripping leading `../` alone still let an embedded
   // `reports/../../..` walk out of the tree, and the tracker is user-editable.
   const reportPath = resolve(REPORTS_ROOT, linkMatch[1].trim().replace(/^(\.\.\/)+/, ''));
-  if (!reportPath.startsWith(REPORTS_ROOT + sep)) return { url: '', reason: 'no-report' };
-  if (!existsSync(reportPath)) return { url: '', reason: 'no-report' };
+  if (!reportPath.startsWith(REPORTS_ROOT + sep)) return null;
+  if (!existsSync(reportPath)) return null;
+  return reportPath;
+}
+
+function resolveReportUrl(reportField) {
+  const reportPath = resolveReportPath(reportField);
+  if (!reportPath) return { url: '', reason: 'no-report' };
   // [ \t]* NOT \s*: \s matches newlines, so an empty `**URL:**` header swallowed
   // the line break and captured the NEXT header's text. Every such report then
   // minted the same bogus key (`**Legitimacy:**`), and the backfill counted it
@@ -1430,6 +1446,29 @@ for (const file of tsvFiles) {
     if (urlDiffers(cand)) return true;
     return Boolean(normalizeUrl(cand.url)) && !addUrl;
   };
+
+  // Pass 0.5 — the addition's own report link and an existing row's report
+  // link resolve to the LITERAL SAME FILE on disk. This is unambiguous proof
+  // of identity, stronger than tier 1 below (bracket-number equality): a
+  // report file is written once, for one specific posting, so two additions
+  // that reference the identical reports/*.md path cannot be two distinct
+  // postings that happen to share a number — unlike a bare number match,
+  // there is no "report-file sequence vs. tracker-row sequence drifted"
+  // explanation available here (#912's reason for tier 1's company guard).
+  // So this tier, unlike tier 1, does not require the company to also match.
+  //
+  // Closes #4506: two concurrent sessions each wrote a TSV addition for the
+  // same report, one spelled the company "Revera" and the other "Revera
+  // (Cogir Senior Living)" — different enough that tier 1's company guard
+  // refused the match, so a second tracker row was appended pointing at the
+  // exact same report file. A same-file match here needs no such guard.
+  if (!duplicate) {
+    const addPath = resolveReportPath(addition.report);
+    if (addPath) {
+      duplicate = existingApps.find(app => !urlDiffers(app) && resolveReportPath(app.report) === addPath);
+      if (duplicate) { dupReason = 'report-file'; reportNumMatched = true; }
+    }
+  }
 
   if (!duplicate && reportNum) {
     // Report-number match must also confirm company (#912). Report-file
