@@ -270,15 +270,23 @@ export function buildJobDescriptionText(content) {
 
 // ── Args ─────────────────────────────────────────────────────────────
 
-const args = process.argv.slice(2);
-const DRY_RUN = args.includes('--dry-run');
-const DEBUG = args.includes('--debug');
-const tenantIdx = args.indexOf('--tenant');
-if (tenantIdx !== -1 && (args[tenantIdx + 1] === undefined || args[tenantIdx + 1].startsWith('--'))) {
-  console.error('Error: --tenant requires a value, e.g. --tenant gnghcm');
-  process.exit(1);
+/**
+ * Parse CLI options at execution time so importing this module never reads the
+ * caller's argv or exits its process.
+ *
+ * @param {string[]} [argv]
+ */
+export function parseArgs(argv = process.argv.slice(2)) {
+  const tenantIdx = argv.indexOf('--tenant');
+  if (tenantIdx !== -1 && (argv[tenantIdx + 1] === undefined || argv[tenantIdx + 1].startsWith('--'))) {
+    throw new Error('--tenant requires a value, e.g. --tenant gnghcm');
+  }
+  return {
+    dryRun: argv.includes('--dry-run'),
+    debug: argv.includes('--debug'),
+    singleTenant: tenantIdx !== -1 ? argv[tenantIdx + 1] : null,
+  };
 }
-const SINGLE_TENANT = tenantIdx !== -1 ? args[tenantIdx + 1] : null;
 
 // ── Load portals.yml ─────────────────────────────────────────────────
 
@@ -288,8 +296,9 @@ const SINGLE_TENANT = tenantIdx !== -1 ? args[tenantIdx + 1] : null;
  * tests and from other tooling, regardless of the caller's user-layer files.
  *
  * @param {string} [portalsPath]
+ * @param {string|null} [singleTenant]
  */
-export function loadConfig(portalsPath = PORTALS_PATH) {
+export function loadConfig(portalsPath = PORTALS_PATH, singleTenant = null) {
   let config = {};
   if (existsSync(portalsPath)) {
     config = yaml.load(readFileSync(portalsPath, 'utf-8')) || {};
@@ -301,7 +310,7 @@ export function loadConfig(portalsPath = PORTALS_PATH) {
   const blacklist = loadBlacklist();
   const validBoards = normalizedBoards.filter(Boolean)
     .filter(board => !blacklist.has(normalizeCompany(board.name)));
-  const boards = validBoards.filter(b => !SINGLE_TENANT || b.tenant === SINGLE_TENANT);
+  const boards = validBoards.filter(b => !singleTenant || b.tenant === singleTenant);
   const filters = {
     titleFilter: buildTitleFilter(config.title_filter),
     locationFilter: buildLocationFilter(config.location_filter),
@@ -384,8 +393,9 @@ async function fetchDetail(page, boardCfg, jobPostingId) {
  * @param {import('playwright').Page} page
  * @param {{ name: string, tenant: string, board: string, culture: string, jobBoardId: string }} boardCfg
  * @param {{ titleFilter: Function, locationFilter: Function, contentFilter: Function, countryEligibilityFilter: Function, visaFilter: Function, matchedTitleKeywords: Function }} [filters]
+ * @param {{ debug?: boolean }} [options]
  */
-export async function scanBoard(page, boardCfg, filters = {}) {
+export async function scanBoard(page, boardCfg, filters = {}, { debug = false } = {}) {
   filters = {
     titleFilter: () => true,
     locationFilter: () => true,
@@ -400,7 +410,7 @@ export async function scanBoard(page, boardCfg, filters = {}) {
 
   await page.goto(boardUrl, { waitUntil: 'networkidle', timeout: 30000 });
 
-  if (DEBUG) {
+  if (debug) {
     const debugDir = join(DATA_ROOT, 'output');
     mkdirSync(debugDir, { recursive: true });
     const debugPng = join(debugDir, `debug-dayforce-${boardCfg.tenant}.png`);
@@ -425,7 +435,7 @@ export async function scanBoard(page, boardCfg, filters = {}) {
     if (next === null) break;
     paginationStart = next;
   }
-  if (DEBUG) console.log(`  [debug] ${boardCfg.tenant}: ${listRows.length} listing row(s) across ${pageCount} page(s)`);
+  if (debug) console.log(`  [debug] ${boardCfg.tenant}: ${listRows.length} listing row(s) across ${pageCount} page(s)`);
 
   // Filter pass on list-level data only — zero extra requests for anything
   // that would be filtered out anyway (explicit design requirement, #3726).
@@ -491,8 +501,9 @@ export async function scanBoard(page, boardCfg, filters = {}) {
 // ── Main ─────────────────────────────────────────────────────────────
 
 async function main() {
+  const { dryRun, debug, singleTenant } = parseArgs();
   mkdirSync(join(DATA_ROOT, 'data'), { recursive: true });
-  const { boards, invalidCount, filters } = loadConfig();
+  const { boards, invalidCount, filters } = loadConfig(PORTALS_PATH, singleTenant);
 
   if (invalidCount > 0) {
     console.log(`  Skipping ${invalidCount} malformed dayforce_boards entr${invalidCount === 1 ? 'y' : 'ies'} (bad tenant/board/culture/jobBoardId)`);
@@ -527,11 +538,11 @@ async function main() {
       const context = await browser.newContext();
       const page = await context.newPage();
       try {
-        result = await scanBoard(page, boardCfg, filters);
+        result = await scanBoard(page, boardCfg, filters, { debug });
       } catch (err) {
         // @ts-ignore
         if (err && err.retriable && attempt < 2) {
-          if (DEBUG) console.log(`\n  [debug] ${boardCfg.tenant}: ${err.message} — re-bootstrapping session and retrying once`);
+          if (debug) console.log(`\n  [debug] ${boardCfg.tenant}: ${err.message} — re-bootstrapping session and retrying once`);
           await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
         } else {
           errors.push({ tenant: boardCfg.tenant, error: err.message });
@@ -565,7 +576,7 @@ async function main() {
     }
   }
 
-  if (!DRY_RUN) {
+  if (!dryRun) {
     if (newOffers.length > 0) await appendToPipeline(newOffers);
     if (newOffers.length > 0) await appendToScanHistory(newOffers, date, 'added');
     if (titleSkipped.length > 0) await appendToScanHistory(titleSkipped, date, 'skipped_title');
@@ -599,7 +610,7 @@ async function main() {
     for (const o of newOffers) {
       console.log(`  + ${o.company} | ${o.title} | ${o.location || 'N/A'}`);
     }
-    if (DRY_RUN) {
+    if (dryRun) {
       console.log('\n(dry run — not saved)');
     } else {
       console.log('\nSaved to data/pipeline.md');

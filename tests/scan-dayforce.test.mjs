@@ -10,6 +10,7 @@
 // live smoke test instead (see the task report, not this file).
 import test from 'node:test';
 import assert from 'node:assert';
+import { spawnSync } from 'node:child_process';
 import {
   validateTenant,
   validateBoardCode,
@@ -26,9 +27,31 @@ import {
   nextPaginationStart,
   joinLocations,
   buildJobDescriptionText,
+  parseArgs,
   scanBoard,
   ALLOWED_HOST,
 } from '../scan-dayforce.mjs';
+
+test('importing the scanner ignores the caller argv', () => {
+  const moduleUrl = new URL('../scan-dayforce.mjs', import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    ['--input-type=module', '--eval', `await import(${JSON.stringify(moduleUrl)})`, '--', '--tenant'],
+    { encoding: 'utf8' },
+  );
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.strictEqual(result.stderr, '');
+});
+
+test('parseArgs reads CLI options only when explicitly called', () => {
+  assert.deepStrictEqual(parseArgs([]), { dryRun: false, debug: false, singleTenant: null });
+  assert.deepStrictEqual(
+    parseArgs(['--dry-run', '--tenant', 'gnghcm', '--debug']),
+    { dryRun: true, debug: true, singleTenant: 'gnghcm' },
+  );
+  assert.throws(() => parseArgs(['--tenant']), /--tenant requires a value/);
+  assert.throws(() => parseArgs(['--tenant', '--debug']), /--tenant requires a value/);
+});
 
 test('validateTenant/validateBoardCode — alphanumeric + _/- only', () => {
   assert.strictEqual(validateTenant('gnghcm'), true);
@@ -106,7 +129,8 @@ test('scanBoard applies all list-level description gates before detail fetch and
         assert.strictEqual(options.maxRedirects, 0);
         return response({ jobPostings: rows, offset: 0, count: rows.length, maxCount: rows.length });
       },
-      get: async (url) => {
+      get: async (url, options) => {
+        assert.strictEqual(options.maxRedirects, 0);
         if (String(url).endsWith('/api/auth/csrf')) return response({ csrfToken: 'token' });
         const id = String(url).split('/').at(-1);
         detailIds.push(id);
