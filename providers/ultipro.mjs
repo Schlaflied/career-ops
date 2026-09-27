@@ -16,7 +16,8 @@
 //
 // Pagination is a plain Top/Skip row offset (Top=50, Skip starts at 0,
 // advances by Top each page) — stop once the returned array is empty,
-// shorter than Top, or Skip + count reaches the response's own `totalCount`.
+// shorter than Top, or a full page yields no new IDs. `totalCount` is reported,
+// never trusted as a stop condition because a tenant may clamp it.
 // A dedicated page-count safety cap applies independently of `totalCount`
 // (ADDING_A_PROVIDER.md, "Absolute page ceiling") — a tenant that still has
 // postings left when the cap is hit is flagged incomplete, not silently
@@ -56,6 +57,7 @@
 import { fetchJsonWithRetry, fetchTextWithRetry, sleep } from './_http.mjs';
 import { intInRange } from './_config-utils.mjs';
 import { htmlToText } from './_html-to-text.mjs';
+import { safeEncodeURIComponent } from './_safe-url.mjs';
 
 // Allowlist PATTERN, not a fixed host string — see the header comment above
 // for why a fixed `=== 'recruiting.ultipro.com'` check is wrong here. `\d*`
@@ -139,26 +141,6 @@ export function assertUltiproUrl(url) {
   return url;
 }
 
-/**
- * `opportunityId` is host-controlled (it comes back off the API response, not
- * out of portals.yml) and becomes a URL query-value here — encodeURIComponent
- * throws a URIError on a lone UTF-16 surrogate, which would otherwise abort
- * an entire batch of detail fetches over one bad record. This codebase's
- * shared `_safe-url.mjs` helper (documented in ADDING_A_PROVIDER.md) isn't
- * present in this checkout, so the same fail-safe behavior — return null,
- * drop just that one job/detail-fetch, never throw out of a loop — is
- * reproduced locally.
- * @param {string} s
- * @returns {string | null}
- */
-function encodeSegment(s) {
-  try {
-    return encodeURIComponent(s);
-  } catch {
-    return null;
-  }
-}
-
 /** @param {string} origin @param {string} tenant @param {string} boardId */
 function buildListUrl(origin, tenant, boardId) {
   return `${origin}/${tenant}/JobBoard/${boardId}/JobBoardView/LoadSearchResults`;
@@ -166,7 +148,7 @@ function buildListUrl(origin, tenant, boardId) {
 
 /** @param {string} origin @param {string} tenant @param {string} boardId @param {string} opportunityId */
 function buildDetailUrl(origin, tenant, boardId, opportunityId) {
-  const seg = encodeSegment(opportunityId);
+  const seg = safeEncodeURIComponent(opportunityId);
   if (seg === null) return null;
   return `${origin}/${tenant}/JobBoard/${boardId}/OpportunityDetail?opportunityId=${seg}`;
 }
@@ -269,7 +251,7 @@ export function parseListPage(json, cfg) {
     const id = typeof item.Id === 'number' ? String(item.Id) : (typeof item.Id === 'string' ? item.Id.trim() : '');
     const title = typeof item.Title === 'string' ? item.Title.trim() : '';
     if (!id || !title) continue;
-    const seg = encodeSegment(id);
+    const seg = safeEncodeURIComponent(id);
     if (seg === null) continue; // a lone-surrogate id — drop just this one posting
     const url = `${cfg.origin}/${cfg.tenant}/JobBoard/${cfg.boardId}/OpportunityDetail?opportunityId=${seg}`;
     /** @type {{title: string, url: string, company: string, location: string, postedAt?: number, description?: string}} */
@@ -413,14 +395,6 @@ export default {
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body,
       }, RETRY_POLICY);
-
-      // The endpoint documents an `opportunities` array plus a `totalCount` —
-      // a response with neither is not "zero postings", it's a shape we don't
-      // recognize (surface it loudly rather than silently reporting an empty
-      // board forever).
-      if (json && typeof json === 'object' && !Array.isArray(json.opportunities) && json.totalCount === undefined) {
-        throw new Error(`ultipro: unrecognized LoadSearchResults response for ${entry.name} — keys: ${Object.keys(json).join(', ') || '(none)'}`);
-      }
 
       const { jobs: pageJobs, total: pageTotal, raw } = parseListPage(json, cfg);
       if (pageTotal !== null) total = pageTotal;
