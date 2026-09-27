@@ -642,7 +642,8 @@ const jdArchiveMissing = jdArchiveResult.findings.filter(f => f.type === 'missin
 const jdArchiveReviewDue = jdArchiveResult.findings.filter(f => f.type === 'jd-archive-review-due');
 for (const f of jdArchiveMissing) error(`${f.file}: ${f.detail}`);
 for (const f of jdArchiveReviewDue) warn(`${f.file}: ${f.detail}`);
-if (jdArchiveMissing.length === 0 && jdArchiveReviewDue.length === 0) {
+for (const w of jdArchiveResult.warnings) warn(`${w.file}: ${w.detail}`);
+if (jdArchiveMissing.length === 0 && jdArchiveReviewDue.length === 0 && jdArchiveResult.warnings.length === 0) {
   ok(jdArchiveResult.reportsScanned === 0
     ? 'No reports yet — nothing to check for JD archives'
     : `All ${jdArchiveResult.reportsScanned} report(s) have an archived JD or a resolvable jds/ capture`);

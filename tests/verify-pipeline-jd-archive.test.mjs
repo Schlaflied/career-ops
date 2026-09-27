@@ -48,10 +48,11 @@ try {
     writeFileSync(f.tracker, `# Applications Tracker\n\n${HEADER}| 1 | 2026-01-01 | Acme | Backend Engineer | 4.0/5 | Applied | ❌ | [1](reports/001-acme-2026-01-01.md) | n |\n`, 'utf-8');
     writeFileSync(join(f.reports, '001-acme-2026-01-01.md'), '# Eval\n\n**Score:** 4.0/5\n', 'utf-8');
     const out = runVp(f);
-    if (/❌.*001-acme-2026-01-01\.md.*no.*Job Description/i.test(out) || (/001-acme-2026-01-01\.md/.test(out) && /no "## Job Description"/.test(out))) {
-      pass('a SENT application (Applied) with no archived JD and no capture reports as an error');
+    const flaggedLine = out.split('\n').find(l => l.includes('⚠️') && l.includes('001-acme-2026-01-01.md'));
+    if (flaggedLine) {
+      pass('a live-status application (Applied) with no archived JD and no capture reports as a jd-archive-review-due warning');
     } else {
-      fail(`expected a missing-jd-archive error, got:\n${out.split('\n').filter(l => /jd|archive/i.test(l)).join('\n')}`);
+      fail(`expected a jd-archive-review-due warning (⚠️ + filename on the same line), got:\n${out.split('\n').filter(l => /jd|archive/i.test(l)).join('\n')}`);
     }
     rmSync(f.tmp, { recursive: true, force: true });
   }
