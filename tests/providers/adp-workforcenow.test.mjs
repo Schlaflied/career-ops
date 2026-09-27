@@ -1,4 +1,5 @@
 // tests/providers/adp-workforcenow.test.mjs
+import assert from 'node:assert/strict';
 import { pass, fail, ROOT } from '../helpers.mjs';
 import { join } from 'path';
 import { pathToFileURL } from 'url';
@@ -214,6 +215,12 @@ try {
   } else {
     fail(`extractSalary() payGradeRange wrong: ${JSON.stringify(salaryStruct)}`);
   }
+
+  const minimumOnly = extractSalary({ payGradeRange: { minimumRate: { amountValue: 50000, currencyCode: 'CAD' } } });
+  assert.deepEqual(minimumOnly, { min: 50000, currency: 'CAD' });
+  const maximumOnly = extractSalary({ payGradeRange: { maximumRate: { amountValue: 70000, currencyCode: 'CAD' } } });
+  assert.deepEqual(maximumOnly, { max: 70000, currency: 'CAD' });
+  pass('extractSalary() omits absent structured bounds instead of emitting null');
 
   const salaryCustomField = {
     customFieldGroup: {

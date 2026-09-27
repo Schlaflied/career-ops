@@ -1,6 +1,8 @@
 // @ts-check
 /** @typedef {import('./_types.js').Provider} Provider */
 
+import { safeEncodeURIComponent } from './_safe-url.mjs';
+
 // ADP Workforce Now Recruitment provider — hits the public, no-auth
 // "staffing" event API behind a tenant's recruitment page. A single-company
 // ATS adapter: configure it as a `tracked_companies:` entry, one per tenant.
@@ -120,31 +122,12 @@ function buildListUrl(cid, ccId, skip) {
  * @param {string} ccId
  */
 function buildDetailUrl(itemId, cid, ccId) {
-  const u = new URL(`${API_BASE}/job-requisitions/${encodeSegment(itemId)}`);
+  const u = new URL(`${API_BASE}/job-requisitions/${safeEncodeURIComponent(itemId)}`);
   u.searchParams.set('cid', cid);
   u.searchParams.set('ccId', ccId);
   u.searchParams.set('lang', 'en_US');
   u.searchParams.set('locale', 'en_US');
   return u.href;
-}
-
-/**
- * `itemID` is host-controlled (it comes back off the API, not out of
- * portals.yml) and becomes a URL path segment here — encodeURIComponent
- * throws a URIError on a lone UTF-16 surrogate, which would otherwise abort
- * an entire batch of detail fetches over one bad record. This codebase's
- * shared `_safe-url.mjs` helper (documented in ADDING_A_PROVIDER.md) isn't
- * present in this checkout, so the same fail-safe behavior — return null,
- * drop just that one job, never throw out of a loop — is reproduced locally.
- * @param {string} s
- * @returns {string | null}
- */
-function encodeSegment(s) {
-  try {
-    return encodeURIComponent(s);
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -234,7 +217,7 @@ export function extractLocation(job) {
  * pulling out digits already in the field, not inventing structure it
  * doesn't have. Returns null when neither source is present or usable.
  * @param {any} job
- * @returns {{min: number | null, max: number | null, currency: string} | null}
+ * @returns {{min?: number, max?: number, currency?: string} | null}
  */
 export function extractSalary(job) {
   const range = job?.payGradeRange;
@@ -244,7 +227,11 @@ export function extractSalary(job) {
   const max = typeof maxAmt === 'number' && Number.isFinite(maxAmt) ? maxAmt : null;
   if (min !== null || max !== null) {
     const currency = range?.minimumRate?.currencyCode || range?.maximumRate?.currencyCode || '';
-    return { min, max, currency: typeof currency === 'string' ? currency : '' };
+    return {
+      ...(min !== null ? { min } : {}),
+      ...(max !== null ? { max } : {}),
+      ...(typeof currency === 'string' && currency ? { currency } : {}),
+    };
   }
 
   // Fallback: tenant-tagged custom fields carrying a free-text range (e.g.
@@ -280,9 +267,9 @@ export function extractSalary(job) {
 export function buildPostingUrl(cid, ccId, itemId, externalJobId) {
   const jobId = externalJobId || itemId;
   // URLSearchParams performs the query-component encoding. Probe the values
-  // with encodeSegment only to retain the lone-surrogate fail-safe; passing
+  // with safeEncodeURIComponent only to retain the lone-surrogate fail-safe; passing
   // its encoded output to URLSearchParams would double-encode `%`.
-  if (encodeSegment(jobId) === null || encodeSegment(itemId) === null) return null;
+  if (safeEncodeURIComponent(jobId) === null || safeEncodeURIComponent(itemId) === null) return null;
   const u = new URL(`https://${ADP_HOST}/mascsr/default/mdf/recruitment/recruitment.html`);
   u.searchParams.set('cid', cid);
   u.searchParams.set('ccId', ccId);
@@ -303,7 +290,7 @@ export function buildPostingUrl(cid, ccId, itemId, externalJobId) {
  *
  * @param {any} json
  * @param {{ cid: string, ccId: string, companyName: string }} cfg
- * @returns {{ jobs: Array<{title: string, url: string, company: string, location: string, postedAt?: number, salary?: {min: number | null, max: number | null, currency: string}}>, total: number | null, raw: any[] }}
+ * @returns {{ jobs: Array<{title: string, url: string, company: string, location: string, postedAt?: number, salary?: {min?: number, max?: number, currency?: string}}>, total: number | null, raw: any[] }}
  */
 export function parseListPage(json, cfg) {
   if (!json || typeof json !== 'object' || Array.isArray(json)) {
@@ -328,7 +315,7 @@ export function parseListPage(json, cfg) {
     const externalJobId = extractExternalJobId(job.customFieldGroup);
     const url = buildPostingUrl(cfg.cid, cfg.ccId, itemId, externalJobId);
     if (!url) continue; // a lone-surrogate id — drop just this one posting
-    /** @type {{title: string, url: string, company: string, location: string, postedAt?: number, salary?: {min: number | null, max: number | null, currency: string}}} */
+    /** @type {{title: string, url: string, company: string, location: string, postedAt?: number, salary?: {min?: number, max?: number, currency?: string}}} */
     const row = {
       title,
       url,
