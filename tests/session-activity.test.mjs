@@ -32,7 +32,7 @@ function sentinelPathFor(activityDir, key) {
 }
 
 function exitedProcessPid() {
-  const child = spawnSync(process.execPath, ['-e', 'process.exit(0)']);
+  const child = spawnSync(process.execPath, ['-e', '']);
   assert.equal(child.status, 0);
   assert.ok(Number.isSafeInteger(child.pid) && child.pid > 0);
   return child.pid;
