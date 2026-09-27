@@ -63,6 +63,18 @@ function seedOf(company, rawUrl, source) {
   };
 }
 
+function linkedReportNumbers(reportCell, notesCell) {
+  const link = String(reportCell ?? '').match(/\[([^\]]*)\]\(([^)]+)\)/);
+  if (!link) return extractTrackerReportNumbers(reportCell, notesCell);
+
+  const targetName = path.basename(link[2].replace(/\\/g, '/'));
+  const target = targetName.match(/^0*(\d+)-.*\.md$/i)?.[1];
+  if (!target) return [];
+  const label = link[1].trim().match(/^#?0*(\d+)$/)?.[1];
+  if (label && Number(label) !== Number(target)) return [];
+  return [Number(target)];
+}
+
 function reportUrlForNumbers(reportNumbers, reportsRoot) {
   if (!reportsRoot || !existsSync(reportsRoot) || reportNumbers.length === 0) return null;
   let filenames;
@@ -94,7 +106,7 @@ export function parseTrackerAtsSeeds(text, { reportsRoot } = {}) {
     // Custom trackers may carry URL directly; prefer it but never scrape an
     // arbitrary Notes URL, which may be unrelated evidence.
     const directUrl = columns.url == null ? null : cells[columns.url];
-    const reportNumbers = extractTrackerReportNumbers(
+    const reportNumbers = linkedReportNumbers(
       columns.report == null ? '' : cells[columns.report],
       columns.notes == null ? '' : cells[columns.notes],
     );

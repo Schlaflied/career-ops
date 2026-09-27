@@ -725,14 +725,18 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
     } catch { /* unroutable history is a skipped seed, not a failed network request */ }
   }
   let errors = 0;
+  const timeoutMs = opts.companyTimeoutMs ?? COMPANY_TIMEOUT_MS;
 
   await parallelEach(scannable, CONCURRENCY, async ({ seed, provider, entry }) => {
+    const operation = { active: true };
     try {
       await withTimeout((async () => {
         const jobs = await provider.fetch(entry, ctx);
-        await processJobs(jobs, `${seed.vendor}-history`, provider, entry.name);
-      })(), COMPANY_TIMEOUT_MS, `${seed.vendor}-history/${entry.name}`);
+        if (!operation.active) return;
+        await processJobs(jobs, `${seed.vendor}-history`, provider, entry.name, () => operation.active);
+      })(), timeoutMs, `${seed.vendor}-history/${entry.name}`, () => { operation.active = false; });
     } catch (err) {
+      operation.active = false;
       errors++;
       if (opts.verbose) console.error(`  ✗ ${seed.vendor}-history/${entry.name}: ${err.message}`);
     }
@@ -753,10 +757,13 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
 // one company, not freeze a worker slot for the rest of a 12k-company sweep.
 const COMPANY_TIMEOUT_MS = 5 * 60_000;
 
-export function withTimeout(promise, ms, label) {
+export function withTimeout(promise, ms, label, onTimeout = null) {
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label}: timed out after ${Math.round(ms / 1000)}s`)), ms);
+    timer = setTimeout(() => {
+      onTimeout?.();
+      reject(new Error(`${label}: timed out after ${Math.round(ms / 1000)}s`));
+    }, ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
@@ -1054,8 +1061,9 @@ async function main() {
   // Per-job filter chain, shared by the parallel sweep, the truncation retry
   // pass (workday), and date enrichment (icims). Closure over the filters and
   // counters so both passes update the same run totals.
-  const processJobs = async (jobs, sourceName, provider, companySlug) => {
+  const processJobs = async (jobs, sourceName, provider, companySlug, shouldContinue = () => true) => {
     for (const job of jobs) {
+      if (!shouldContinue()) return;
       if (!job.url || !job.title) continue;
       // Confirmed-stale postings are always dropped. Undated postings are
       // dropped by default (a reverse scan targets *fresh* roles) but
@@ -1077,6 +1085,7 @@ async function main() {
       if (dateClass === 'undated' && provider.enrichDate
           && titleFilter(job.title, companySlug) && locationFilter(job.location, job.url, job.title)) {
         try { await provider.enrichDate(job, ctx); } catch { /* stays undated */ }
+        if (!shouldContinue()) return;
         dateClass = classifyPostingDate(job, cutoff);
       }
       if (dateClass === 'stale') continue;
@@ -1306,7 +1315,7 @@ async function main() {
   }
 
   // ── User tracker + scan-history ATS seeds (#3697) ───────────────
-  if (historySeeds.length) {
+  if (historySeeds.length && !stoppedByOutage) {
     const providers = await loadProviders(PROVIDERS_DIR);
     log(`\n🌱 Application history — ${historySeeds.length} unique ATS board(s) derived locally...`);
     const result = await runHistorySeedScan(historySeeds, providers, opts, ctx, processJobs);

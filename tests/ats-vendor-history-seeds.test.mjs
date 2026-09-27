@@ -103,11 +103,33 @@ try {
       '# Evaluation\n\n**Score:** 4/5 | **URL:** https://jobs.lever.co/acme/job-1 | **Legitimacy:** High\n',
       'utf-8',
     );
+    writeFileSync(
+      join(root, 'reports/002-other.md'),
+      '# Evaluation\n\n**Score:** 4/5 | **URL:** https://jobs.ashbyhq.com/other/job-2 | **Legitimacy:** High\n',
+      'utf-8',
+    );
+    const mismatchedReportLink = trackerWithUrl
+      .replace('https://jobs.lever.co/acme/job-1', '-')
+      .replace('| - | - | |', '| - | [1](../reports/002-other.md) | |');
+    assert.deepEqual(
+      parseTrackerAtsSeeds(mismatchedReportLink, { reportsRoot: join(root, 'reports') }),
+      [],
+      'a numeric link label may not redirect seed derivation to a different report target',
+    );
+    const matchedReportLink = mismatchedReportLink.replace('[1](../reports/002-other.md)', '[2](../reports/002-other.md)');
+    assert.equal(
+      parseTrackerAtsSeeds(matchedReportLink, { reportsRoot: join(root, 'reports') })[0]?.vendor,
+      'ashby',
+      'the linked report target is used when its label agrees',
+    );
     writeFileSync(join(root, 'data/scan-history.tsv'), history, 'utf-8');
     const oldTracker = process.env.CAREER_OPS_TRACKER;
     process.env.CAREER_OPS_TRACKER = trackerPath;
     try {
-      const seeds = loadHistoryAtsSeeds({ dataRoot: root });
+      const seeds = loadHistoryAtsSeeds({
+        dataRoot: root,
+        scanHistoryPath: join(root, 'data/scan-history.tsv'),
+      });
       assert.equal(seeds.length, 2, 'two Lever postings must collapse to one board, plus Dayforce');
       assert.deepEqual(seeds.map((seed) => seed.vendor).sort(), ['dayforce', 'lever']);
     } finally {
@@ -143,6 +165,43 @@ try {
   assert.equal(processed[0].source, 'lever-history');
   assert.deepEqual(run, { total: 1, derived: 2, unsupported: 1, errors: 0 });
   pass('history scan fetches only locally installed providers and keeps unsupported host labels inert');
+
+  let lateProcessCalls = 0;
+  const slowProvider = {
+    id: 'lever',
+    detect: () => ({ url: 'mock' }),
+    async fetch() {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return [{ title: 'Late', url: 'https://jobs.lever.co/acme/late' }];
+    },
+  };
+  const timedOut = await runHistorySeedScan(
+    [{ company: 'Acme', vendor: 'lever', careersUrl: 'https://jobs.lever.co/acme' }],
+    new Map([['lever', slowProvider]]),
+    { atsExplicit: false, ats: [], limit: Infinity, shuffle: false, verbose: false, companyTimeoutMs: 5 },
+    {},
+    async () => { lateProcessCalls++; },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(timedOut.errors, 1);
+  assert.equal(lateProcessCalls, 0);
+  pass('timed-out history fetches cannot send late results into the shared processor');
+
+  let lateProcessorMutations = 0;
+  const processingTimedOut = await runHistorySeedScan(
+    [{ company: 'Acme', vendor: 'lever', careersUrl: 'https://jobs.lever.co/acme' }],
+    new Map([['lever', mockProvider]]),
+    { atsExplicit: false, ats: [], limit: Infinity, shuffle: false, verbose: false, companyTimeoutMs: 5 },
+    {},
+    async (_jobs, _source, _provider, _company, isActive) => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      if (isActive()) lateProcessorMutations++;
+    },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(processingTimedOut.errors, 1);
+  assert.equal(lateProcessorMutations, 0);
+  pass('a timeout invalidates work already waiting inside the shared processor');
 } catch (error) {
   fail(`ATS history seed regression: ${error.stack || error.message}`);
 }
