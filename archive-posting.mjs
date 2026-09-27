@@ -32,6 +32,7 @@ import { reportPrefix } from './jd-capture.mjs';
 import { rejectPrivateOrInvalid, validateUrlSecurity } from './liveness-browser.mjs';
 import { validateFlags } from './lib/cli-flags.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
+import { detectNonContentMarker } from './check-jd-archive.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = getCareerOpsRoot();
@@ -349,6 +350,23 @@ export async function archiveUrl(browser, url, { company: companyHint, role: rol
     const pageTitle = await page.title();
     const h1Text = await page.$eval('h1', el => el.innerText.trim()).catch(() => '');
     const urlCompany = extractCompanyFromUrl(url);
+
+    // check-jd-archive.mjs already knows how to recognize a login wall, a 404
+    // shell, a paywall interstitial, or a "please enable JavaScript" page —
+    // but only at AUDIT time, well after the fact. Applying the same
+    // detection HERE, before anything is written, means a capture never
+    // silently reports success on a non-content page in the first place — a
+    // login-wall PDF sitting in jds/ is worse than no capture at all, since
+    // it reads as "archived" until someone happens to open it or run a
+    // separate audit (#4526). Checked against the rendered page's own text,
+    // not the report-section text detectNonContentMarker was written for —
+    // the same phrase patterns apply to either, and body innerText is what a
+    // login/paywall/404 shell actually renders as its visible content.
+    const bodyText = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '');
+    const nonContentMarker = detectNonContentMarker(bodyText);
+    if (nonContentMarker) {
+      throw new Error(`refusing to archive: page ${nonContentMarker.reason}`);
+    }
 
     // Parse page title first — it usually has "Role | Company" or "Company | Role".
     // Fall back to h1 for the role when the page title doesn't yield one cleanly.
