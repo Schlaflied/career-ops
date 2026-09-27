@@ -122,6 +122,19 @@ test('a bot-challenge (Cloudflare-style) page is refused, not archived', async (
   assert.equal(pdfCalled(), false);
 });
 
+test('a bot-challenge page phrased "Verify that you are human" is refused, not archived', async () => {
+  // Regression for the "that"-less bot-challenge regex: a real, common
+  // Cloudflare-style challenge phrasing inserts "that" between "verify" and
+  // "you are human" ("Verify that you are human"), which the original
+  // verify(?:ing)? you are (?:a )?human branch did not match.
+  const { browser, pdfCalled } = makeFakeBrowser({ bodyText: 'Verify that you are human by completing the action below.' });
+  await assert.rejects(
+    () => archiveUrl(browser, 'https://boards.greenhouse.io/acme/jobs/7', {}),
+    /refusing to archive.*bot-verification\/challenge/i,
+  );
+  assert.equal(pdfCalled(), false, 'a "Verify that you are human" challenge page must never reach page.pdf()');
+});
+
 test('a real posting that ALSO carries an incidental "sign in" prompt is still archived (mixed content)', async () => {
   // The marker check is length-gated specifically so a real, long JD with a
   // small sidebar/footer sign-in nudge next to it doesn't get refused — only
