@@ -17,7 +17,7 @@
  * Run: node merge-tracker.mjs [--dry-run] [--verify]
  */
 
-import { readFileSync, readdirSync, mkdirSync, renameSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, mkdirSync, renameSync, existsSync, statSync } from 'fs';
 import { join, basename, dirname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
@@ -271,7 +271,10 @@ function resolveReportPath(reportField) {
   // `reports/../../..` walk out of the tree, and the tracker is user-editable.
   const reportPath = resolve(REPORTS_ROOT, linkMatch[1].trim().replace(/^(\.\.\/)+/, ''));
   if (!reportPath.startsWith(REPORTS_ROOT + sep)) return null;
-  if (!existsSync(reportPath)) return null;
+  // existsSync alone accepts a directory, which would let the new Pass 0.5
+  // dedup tier treat two additions whose report link happens to resolve to
+  // the same directory as report-identical without ever reading a file.
+  if (!existsSync(reportPath) || !statSync(reportPath).isFile()) return null;
   return reportPath;
 }
 

@@ -65,6 +65,7 @@ ok('THE BUG: two concurrent additions for the SAME report, spelled differently, 
     runMerge(env);
     const rows = trackerRows(env);
     assert.equal(rows.length, 1, `expected the same-report addition to update the existing row, got ${rows.length} rows (duplicate)`);
+    assert.ok(rows[0].includes('concurrent-session re-eval'), 'the incoming note was actually merged in, not just deduped away');
   } finally { cleanup(env); }
 });
 
