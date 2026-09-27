@@ -17,7 +17,14 @@ console.log('\nATS vendor + user-history reverse-scan seeds (#3697)');
 
 try {
   assert.equal(parseArgs(['node', 'scan-ats-full.mjs']).historySeeds, false);
-  assert.equal(parseArgs(['node', 'scan-ats-full.mjs', '--ats', 'successfactors']).historySeeds, false);
+  assert.throws(
+    () => parseArgs(['node', 'scan-ats-full.mjs', '--ats', 'successfactors']),
+    /--ats successfactors has no public directory source.*--history-seeds/,
+  );
+  assert.throws(
+    () => parseArgs(['node', 'scan-ats-full.mjs', '--ats', 'greenhouse,successfactors']),
+    /--ats successfactors has no public directory source.*--history-seeds/,
+  );
   assert.equal(parseArgs(['node', 'scan-ats-full.mjs', '--history-seeds']).historySeeds, true);
   assert.equal(
     parseArgs(['node', 'scan-ats-full.mjs', '--history-seeds', '--ats', 'successfactors']).historySeeds,
@@ -283,6 +290,35 @@ try {
   assert.equal(pendingTimeoutRun.errors, 12);
   assert.equal(pendingPeak, 6, 'timed-out but unsettled fetches must keep occupying their host slots');
   pass('pending fetches retain the host cap after their outer timeout fires');
+
+  let foreverActive = 0;
+  let foreverPeak = 0;
+  const neverSettlesProvider = {
+    id: 'lever',
+    detect: () => ({ url: 'mock' }),
+    async fetch() {
+      foreverActive++;
+      foreverPeak = Math.max(foreverPeak, foreverActive);
+      return new Promise(() => {});
+    },
+  };
+  const foreverRun = await Promise.race([
+    runHistorySeedScan(
+      Array.from({ length: 12 }, (_, i) => ({
+        company: `Forever ${i}`,
+        vendor: 'lever',
+        careersUrl: `https://jobs.lever.co/forever-${i}`,
+      })),
+      new Map([['lever', neverSettlesProvider]]),
+      { atsExplicit: false, ats: [], limit: Infinity, shuffle: false, verbose: false, companyTimeoutMs: 5 },
+      {},
+      async () => {},
+    ),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('history scan remained stuck on pending fetches')), 250)),
+  ]);
+  assert.equal(foreverRun.errors, 12, 'timed-out and quarantined boards must all be reported as errors');
+  assert.equal(foreverPeak, 6, 'a quarantined host must not replace its six permanently pending requests');
+  pass('a permanently pending provider cannot hang the sweep or exceed the per-host cap');
 } catch (error) {
   fail(`ATS history seed regression: ${error.stack || error.message}`);
 }

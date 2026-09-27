@@ -389,12 +389,20 @@ export function parseArgs(argv) {
     console.error(`Error: unknown ATS source(s): ${unknown.join(', ')}. Valid: ${[...validAts].join(', ')}`);
     process.exit(1);
   }
+  const historySeeds = args.includes('--history-seeds');
+  const historyOnly = ats.filter(a => !SOURCES[a]);
+  if (!historySeeds && historyOnly.length) {
+    throw new Error(
+      `--ats ${historyOnly.join(',')} ${historyOnly.length === 1 ? 'has' : 'have'} no public directory source; ` +
+      're-run with --history-seeds to scan boards derived from local application history.',
+    );
+  }
   return {
     sinceDays,
     limit,
     ats,
     atsExplicit: Boolean(atsArg),
-    historySeeds: args.includes('--history-seeds'),
+    historySeeds,
     seeds,
     dryRun: args.includes('--dry-run'),
     liveness: args.includes('--liveness'),
@@ -728,30 +736,45 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
   let errors = 0;
   const timeoutMs = opts.companyTimeoutMs ?? COMPANY_TIMEOUT_MS;
   const withHostSlot = createKeyedLimiter(SINGLE_HOST_CONCURRENCY);
+  // An arbitrary provider may ignore cancellation or never settle. Once one
+  // request times out, quarantine that host for the rest of this run: queued
+  // boards are counted as errors instead of starting more requests behind the
+  // six still potentially in flight. This lets the sweep finish without ever
+  // exceeding the host cap.
+  const quarantinedHosts = new Set();
 
   await parallelEach(scannable, CONCURRENCY, async ({ seed, provider, entry }) => {
     const hostKey = (() => {
       try { return new URL(entry.careers_url).hostname.toLowerCase(); } catch { return seed.vendor; }
     })();
     await withHostSlot(hostKey, async () => {
+      if (quarantinedHosts.has(hostKey)) {
+        errors++;
+        if (opts.verbose) console.error(`  ✗ ${seed.vendor}-history/${entry.name}: host skipped after an earlier timeout`);
+        return;
+      }
       const operation = { active: true };
       const operationPromise = (async () => {
         const jobs = await provider.fetch(entry, ctx);
         if (!operation.active) return;
         await processJobs(jobs, `${seed.vendor}-history`, provider, entry.name, () => operation.active);
       })();
+      let timedOut = false;
       try {
-        await withTimeout(operationPromise, timeoutMs, `${seed.vendor}-history/${entry.name}`, () => { operation.active = false; });
+        await withTimeout(operationPromise, timeoutMs, `${seed.vendor}-history/${entry.name}`, () => {
+          timedOut = true;
+          operation.active = false;
+        });
       } catch (err) {
         operation.active = false;
+        if (timedOut) quarantinedHosts.add(hostKey);
         errors++;
         if (opts.verbose) console.error(`  ✗ ${seed.vendor}-history/${entry.name}: ${err.message}`);
       } finally {
-        // A timeout invalidates late results, but it cannot force an arbitrary
-        // provider promise to settle. Keep this host slot until the underlying
-        // operation does settle; otherwise six timed-out requests could remain
-        // in flight while the limiter starts six more against the same API.
-        await operationPromise.catch(() => {});
+        // Observe a late rejection without waiting indefinitely. A timed-out
+        // operation keeps running at most as one of the host's original six;
+        // quarantining prevents queued work from replacing it.
+        operationPromise.catch(() => {});
       }
     });
   });
