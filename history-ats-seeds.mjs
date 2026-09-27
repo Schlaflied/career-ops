@@ -66,13 +66,12 @@ function seedOf(company, rawUrl, source) {
 function linkedReportNumbers(reportCell, notesCell) {
   const link = String(reportCell ?? '').match(/\[([^\]]*)\]\(([^)]+)\)/);
   if (!link) return extractTrackerReportNumbers(reportCell, notesCell);
-
-  const targetName = path.basename(link[2].replace(/\\/g, '/'));
-  const target = targetName.match(/^0*(\d+)-.*\.md$/i)?.[1];
-  if (!target) return [];
-  const label = link[1].trim().match(/^#?0*(\d+)$/)?.[1];
-  if (label && Number(label) !== Number(target)) return [];
-  return [Number(target)];
+  // Reuse the tracker's canonical local-target validation. It rejects HTTP(S)
+  // and protocol-relative links, and returns both numbers on a label/target
+  // mismatch. Exactly one number therefore proves a local, self-consistent
+  // report link. A present-but-invalid link must not fall back to Notes.
+  const validated = extractTrackerReportNumbers(reportCell);
+  return validated.length === 1 ? validated : [];
 }
 
 function reportUrlForNumbers(reportNumbers, reportsRoot) {

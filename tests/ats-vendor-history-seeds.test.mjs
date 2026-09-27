@@ -122,6 +122,15 @@ try {
       'ashby',
       'the linked report target is used when its label agrees',
     );
+    const externalReportLink = matchedReportLink.replace(
+      '[2](../reports/002-other.md)',
+      '[2](https://example.com/002-other.md)',
+    );
+    assert.deepEqual(
+      parseTrackerAtsSeeds(externalReportLink, { reportsRoot: join(root, 'reports') }),
+      [],
+      'an external report-looking target may not select a same-numbered local report',
+    );
     writeFileSync(join(root, 'data/scan-history.tsv'), history, 'utf-8');
     const oldTracker = process.env.CAREER_OPS_TRACKER;
     process.env.CAREER_OPS_TRACKER = trackerPath;
@@ -202,6 +211,41 @@ try {
   assert.equal(processingTimedOut.errors, 1);
   assert.equal(lateProcessorMutations, 0);
   pass('a timeout invalidates work already waiting inside the shared processor');
+
+  let activeTotal = 0;
+  let maxTotal = 0;
+  const activeByHost = new Map();
+  const maxByHost = new Map();
+  const cappedProvider = (id) => ({
+    id,
+    detect: () => ({ url: 'mock' }),
+    async fetch(entry) {
+      const host = new URL(entry.careers_url).hostname;
+      activeTotal++;
+      maxTotal = Math.max(maxTotal, activeTotal);
+      const active = (activeByHost.get(host) || 0) + 1;
+      activeByHost.set(host, active);
+      maxByHost.set(host, Math.max(maxByHost.get(host) || 0, active));
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      activeByHost.set(host, activeByHost.get(host) - 1);
+      activeTotal--;
+      return [];
+    },
+  });
+  const concurrencySeeds = [
+    ...Array.from({ length: 10 }, (_, i) => ({ company: `GH ${i}`, vendor: 'greenhouse', careersUrl: `https://job-boards.greenhouse.io/gh-${i}` })),
+    ...Array.from({ length: 10 }, (_, i) => ({ company: `Lever ${i}`, vendor: 'lever', careersUrl: `https://jobs.lever.co/lever-${i}` })),
+  ];
+  await runHistorySeedScan(
+    concurrencySeeds,
+    new Map([['greenhouse', cappedProvider('greenhouse')], ['lever', cappedProvider('lever')]]),
+    { atsExplicit: false, ats: [], limit: Infinity, shuffle: false, verbose: false },
+    {},
+    async () => {},
+  );
+  assert.ok([...maxByHost.values()].every((peak) => peak <= 6), `per-host peaks: ${JSON.stringify([...maxByHost])}`);
+  assert.ok(maxTotal > 6, `different hosts should still overlap; peak was ${maxTotal}`);
+  pass('history scanning caps each shared provider host at six while different hosts overlap');
 } catch (error) {
   fail(`ATS history seed regression: ${error.stack || error.message}`);
 }

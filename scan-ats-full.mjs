@@ -726,20 +726,26 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
   }
   let errors = 0;
   const timeoutMs = opts.companyTimeoutMs ?? COMPANY_TIMEOUT_MS;
+  const withHostSlot = createKeyedLimiter(SINGLE_HOST_CONCURRENCY);
 
   await parallelEach(scannable, CONCURRENCY, async ({ seed, provider, entry }) => {
-    const operation = { active: true };
-    try {
-      await withTimeout((async () => {
-        const jobs = await provider.fetch(entry, ctx);
-        if (!operation.active) return;
-        await processJobs(jobs, `${seed.vendor}-history`, provider, entry.name, () => operation.active);
-      })(), timeoutMs, `${seed.vendor}-history/${entry.name}`, () => { operation.active = false; });
-    } catch (err) {
-      operation.active = false;
-      errors++;
-      if (opts.verbose) console.error(`  ✗ ${seed.vendor}-history/${entry.name}: ${err.message}`);
-    }
+    const hostKey = (() => {
+      try { return new URL(entry.careers_url).hostname.toLowerCase(); } catch { return seed.vendor; }
+    })();
+    await withHostSlot(hostKey, async () => {
+      const operation = { active: true };
+      try {
+        await withTimeout((async () => {
+          const jobs = await provider.fetch(entry, ctx);
+          if (!operation.active) return;
+          await processJobs(jobs, `${seed.vendor}-history`, provider, entry.name, () => operation.active);
+        })(), timeoutMs, `${seed.vendor}-history/${entry.name}`, () => { operation.active = false; });
+      } catch (err) {
+        operation.active = false;
+        errors++;
+        if (opts.verbose) console.error(`  ✗ ${seed.vendor}-history/${entry.name}: ${err.message}`);
+      }
+    });
   });
 
   return {
@@ -756,6 +762,32 @@ export async function runHistorySeedScan(seeds, providers, opts, ctx, processJob
 // timeouts in _http.mjs, an unforeseen hang (DNS, a provider bug) must cost
 // one company, not freeze a worker slot for the rest of a 12k-company sweep.
 const COMPANY_TIMEOUT_MS = 5 * 60_000;
+
+export function createKeyedLimiter(limit) {
+  const states = new Map();
+  return async function withKeySlot(key, fn) {
+    let state = states.get(key);
+    if (!state) {
+      state = { active: 0, queue: [] };
+      states.set(key, state);
+    }
+    if (state.active >= limit) {
+      await new Promise((resolve) => state.queue.push(resolve));
+    } else {
+      state.active++;
+    }
+    try {
+      return await fn();
+    } finally {
+      const next = state.queue.shift();
+      if (next) next();
+      else {
+        state.active--;
+        if (state.active === 0) states.delete(key);
+      }
+    }
+  };
+}
 
 export function withTimeout(promise, ms, label, onTimeout = null) {
   let timer;
