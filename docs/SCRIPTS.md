@@ -678,8 +678,9 @@ Defaults are unchanged, so a single-lane setup needs none of this. Note that the
 
 Reverse ATS discovery scanner. Where `scan.mjs` scans the companies you track in `portals.yml`, this inverts the direction: it walks public directories of companies per ATS (Greenhouse, Lever, Ashby, Workday, iCIMS, BambooHR) and surfaces fresh postings matching your `portals.yml` `title_filter` / `location_filter` — no manual company curation. Company directories come from the public [job-board-aggregator](https://github.com/Feashliaa/job-board-aggregator) dataset, cached in `data/cache/` for 24 hours.
 
-Every normal run also derives board seeds locally from posting URLs already in
-the user's tracker and `data/scan-history.tsv`. Known ATS hosts route to the
+Pass `--history-seeds` to derive board seeds locally from posting URLs already
+in the user's tracker and `data/scan-history.tsv`. A normal run does not read
+either history source. With the flag, known ATS hosts route to the
 matching installed provider; an unknown host remains its hostname rather than
 being discarded. Known vendor labels become scannable automatically if a
 matching provider is added later. This is read-only input: no tracker column or
@@ -711,7 +712,8 @@ Same detection logic applies to `scan.mjs` (the standard portal scanner) — the
 npm run scan:full                              # all ATS directories, last 3 days
 node scan-ats-full.mjs --since 7               # postings from the last 7 days
 node scan-ats-full.mjs --ats greenhouse,workday # subset of sources
-node scan-ats-full.mjs --ats successfactors     # history-derived SF boards only
+node scan-ats-full.mjs --history-seeds          # also scan boards found in local history
+node scan-ats-full.mjs --history-seeds --ats successfactors # history-derived SF boards only
 node scan-ats-full.mjs --limit 200             # max companies per ATS
 node scan-ats-full.mjs --dry-run               # preview without writing
 node scan-ats-full.mjs --liveness              # Playwright-verify matches first

@@ -10,12 +10,21 @@ import {
   parseScanHistoryAtsSeeds,
   parseTrackerAtsSeeds,
 } from '../history-ats-seeds.mjs';
-import { runHistorySeedScan } from '../scan-ats-full.mjs';
+import { parseArgs, runHistorySeedScan } from '../scan-ats-full.mjs';
 import { pass, fail } from './helpers.mjs';
 
 console.log('\nATS vendor + user-history reverse-scan seeds (#3697)');
 
 try {
+  assert.equal(parseArgs(['node', 'scan-ats-full.mjs']).historySeeds, false);
+  assert.equal(parseArgs(['node', 'scan-ats-full.mjs', '--ats', 'successfactors']).historySeeds, false);
+  assert.equal(parseArgs(['node', 'scan-ats-full.mjs', '--history-seeds']).historySeeds, true);
+  assert.equal(
+    parseArgs(['node', 'scan-ats-full.mjs', '--history-seeds', '--ats', 'successfactors']).historySeeds,
+    true,
+  );
+  pass('application-history board discovery is disabled by default and requires --history-seeds');
+
   const cases = [
     ['https://job-boards.eu.greenhouse.io/acme/jobs/1', 'greenhouse'],
     ['https://jobs.lever.co/acme/id', 'lever'],

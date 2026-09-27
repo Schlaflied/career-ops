@@ -31,7 +31,7 @@
  *   node scan-ats-full.mjs                      # scan all ATS directories, last 3 days
  *   node scan-ats-full.mjs --since 7            # postings from the last 7 days
  *   node scan-ats-full.mjs --ats greenhouse,workday  # subset of sources
- *   node scan-ats-full.mjs --ats successfactors # scan boards found in application history
+ *   node scan-ats-full.mjs --history-seeds --ats successfactors # scan history-derived boards
  *   node scan-ats-full.mjs --limit 200          # max companies per ATS (default: all)
  *   node scan-ats-full.mjs --dry-run            # preview without writing files
  *   node scan-ats-full.mjs --liveness           # Playwright-verify matches before writing
@@ -309,7 +309,7 @@ export const SOURCES = {
 // ── CLI args ────────────────────────────────────────────────────────
 
 const KNOWN_FLAGS = [
-  '--since', '--limit', '--ats', '--seeds', '--dry-run', '--liveness',
+  '--since', '--limit', '--ats', '--seeds', '--history-seeds', '--dry-run', '--liveness',
   '--verbose', '--md-out', '--json', '--include-undated', '--include-blacklisted',
   '--shuffle', '--resume', '--help', '-h',
 ];
@@ -322,7 +322,8 @@ const USAGE = `Usage:
   node scan-ats-full.mjs                      # scan all ATS directories, last 3 days
   node scan-ats-full.mjs --since 7            # postings from the last 7 days
   node scan-ats-full.mjs --ats greenhouse,workday  # subset of sources
-  node scan-ats-full.mjs --ats successfactors # history-derived boards for this ATS
+  node scan-ats-full.mjs --history-seeds       # also scan boards from local application history
+  node scan-ats-full.mjs --history-seeds --ats successfactors # history-derived boards for this ATS
   node scan-ats-full.mjs --limit 200          # max companies per ATS (default: all)
   node scan-ats-full.mjs --dry-run            # preview without writing files
   node scan-ats-full.mjs --liveness           # Playwright-verify matches before writing
@@ -332,7 +333,7 @@ const USAGE = `Usage:
   node scan-ats-full.mjs --resume             # continue an interrupted sweep from its checkpoint
   node scan-ats-full.mjs --help               # print this usage block and exit`;
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const args = argv.slice(2);
 
   // Shared with reply-watch.mjs/dedup-tracker.mjs/scan.mjs via
@@ -393,7 +394,7 @@ function parseArgs(argv) {
     limit,
     ats,
     atsExplicit: Boolean(atsArg),
-    historySeeds: seeds.length === 0 || Boolean(atsArg),
+    historySeeds: args.includes('--history-seeds'),
     seeds,
     dryRun: args.includes('--dry-run'),
     liveness: args.includes('--liveness'),
@@ -939,17 +940,17 @@ async function main() {
   // content_filter.by_title_keyword the same way scan.mjs does.
   opts.titleFilterConfig = fullTitleFilterConfig;
 
-  // User-layer history is an additive board directory: it fills the vendors
-  // that have no public community dataset without changing the tracker schema.
-  // --seeds alone remains the explicitly requested VC-only mode; a normal run,
-  // or an explicit --ats selection, includes history-derived boards.
+  // User-layer history is an opt-in additive board directory. It fills vendors
+  // that have no public community dataset without changing the tracker schema,
+  // but an ordinary reverse scan never reads the user's application history.
   const historySeeds = opts.historySeeds
     ? loadHistoryAtsSeeds({ dataRoot: DATA_ROOT, scanHistoryPath: SCAN_HISTORY_PATH })
     : [];
 
   const atsSummary = opts.ats.length ? `ats: ${opts.ats.join(', ')}` : '';
   const seedsSummary = opts.seeds.length ? `seeds: ${opts.seeds.join(', ')}` : '';
-  const sourcesSummary = [atsSummary, seedsSummary].filter(Boolean).join(' | ');
+  const historySummary = opts.historySeeds ? 'history seeds' : '';
+  const sourcesSummary = [atsSummary, seedsSummary, historySummary].filter(Boolean).join(' | ');
   log(`Reverse ATS scan — ${sourcesSummary} | since ${opts.sinceDays}d${opts.limit < Infinity ? ` | limit ${opts.limit}/ats` : ''}${opts.shuffle ? ' | shuffled' : ''}${opts.includeUndated ? ' | +undated' : ''}${opts.liveness ? ' | liveness' : ''}${opts.dryRun ? ' | DRY RUN' : ''}`);
 
   // extraTokensFor: a historical scan-history.tsv row records the URL it was
