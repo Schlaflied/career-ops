@@ -153,12 +153,14 @@ test('a bot-challenge page phrased "CAPTCHA verification required to continue" i
 });
 
 test('a real posting mentioning CAPTCHA as a technology is NOT mistaken for a challenge page (false-positive guard)', async () => {
-  const longJd = ('We are looking for a Senior Backend Engineer to join our platform team. '
-    + 'Requirements: experience implementing CAPTCHA verification for high-traffic login flows, familiarity with rate limiting and abuse prevention. '
-    + 'You will collaborate with security, product, and other engineering teams to keep our platform safe. '
-    + 'We offer competitive compensation and a hybrid work environment. Apply today to join our growing team. ').repeat(3);
-  assert.ok(longJd.length > 600, 'fixture must exercise the long-page path');
-  const { browser, pdfCalled } = makeFakeBrowser({ bodyText: longJd });
+  // Deliberately kept SHORT (<= NON_CONTENT_PAGE_MAX_CHARS) so this actually
+  // exercises detectNonContentMarker()'s own regex specificity — a longer
+  // fixture would pass only because it skips the marker check entirely via
+  // the length gate, proving nothing about the regex itself. The separate
+  // "mixed content" test below covers the length-gate behavior.
+  const shortJd = 'Requirements: experience implementing CAPTCHA verification for login flows.';
+  assert.ok(shortJd.length <= 600, 'fixture must stay short enough to exercise the marker regex, not the length gate');
+  const { browser, pdfCalled } = makeFakeBrowser({ bodyText: shortJd });
   await archiveUrl(browser, 'https://boards.greenhouse.io/acme/jobs/9', {});
   assert.equal(pdfCalled(), true, 'a real JD mentioning CAPTCHA as a topic must not be refused');
 });
