@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { atsVendorOf } from '../ats-vendor.mjs';
+import { knownAtsVendorOf } from '../analyze-patterns.mjs';
 import {
   atsBoardUrlOf,
   loadHistoryAtsSeeds,
@@ -31,6 +32,22 @@ try {
   for (const [url, expected] of cases) assert.equal(atsVendorOf(url), expected, url);
   for (const invalid of ['', null, 'not a url', 'file:///tmp/jobs']) assert.equal(atsVendorOf(invalid), null);
   pass('atsVendorOf identifies known ATS hosts, rejects spoofing, and preserves an unknown hostname');
+
+  assert.equal(knownAtsVendorOf('https://jobs.lever.co/acme/id'), 'lever');
+  assert.equal(knownAtsVendorOf('https://jobs.dayforcehcm.com/en-US/acme/jobs/1'), null);
+  assert.equal(knownAtsVendorOf('https://careers.bigco.com/jobs/1'), null);
+  assert.equal(knownAtsVendorOf('not a url'), null);
+  pass('analyze-patterns keeps only known ATS vendors and drops employer hostnames');
+
+  assert.equal(
+    atsBoardUrlOf('https://boards.greenhouse.io/acme/jobs/123?gh_src=history', 'greenhouse'),
+    'https://job-boards.greenhouse.io/acme',
+  );
+  assert.equal(
+    atsBoardUrlOf('https://job-boards.eu.greenhouse.io/acme/jobs/123', 'greenhouse'),
+    'https://job-boards.eu.greenhouse.io/acme',
+  );
+  pass('legacy Greenhouse history URLs normalize to the host detected by the provider');
 
   assert.equal(
     atsBoardUrlOf('https://jobs.lever.co/acme/role-id?lever-source=x', 'lever'),

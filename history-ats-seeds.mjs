@@ -24,7 +24,14 @@ export function atsBoardUrlOf(rawUrl, vendor = atsVendorOf(rawUrl)) {
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
 
   const parts = u.pathname.split('/').filter(Boolean);
-  if (vendor === 'greenhouse' || vendor === 'lever' || vendor === 'ashby' || vendor === 'smartrecruiters') {
+  if (vendor === 'greenhouse') {
+    // Older Greenhouse postings use boards.greenhouse.io, but the current
+    // provider detects the public boards API at job-boards.greenhouse.io.
+    if (u.hostname.toLowerCase() === 'boards.greenhouse.io') {
+      u.hostname = 'job-boards.greenhouse.io';
+    }
+    if (parts[0]) u.pathname = `/${parts[0]}`;
+  } else if (vendor === 'lever' || vendor === 'ashby' || vendor === 'smartrecruiters') {
     if (parts[0]) u.pathname = `/${parts[0]}`;
   } else if (vendor === 'workday') {
     const withoutLocale = /^[a-z]{2}-[A-Z]{2}$/.test(parts[0] || '') ? parts.slice(1) : parts;

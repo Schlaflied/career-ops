@@ -257,6 +257,17 @@ export function scoreThresholdFrom(positiveScoresRaw, negativeScoresRaw) {
   };
 }
 
+// Vendor outcome analysis intentionally stays on the five URL-fingerprintable
+// community ATS families it has always reported. The shared detector knows
+// more providers for scan routing, but those do not widen this analysis.
+const VENDOR_ANALYSIS_SCOPE = Object.freeze(['greenhouse', 'lever', 'ashby', 'workday', 'icims']);
+
+/** Keep vendor analysis inside its declared taxonomy, not arbitrary hosts. */
+export function knownAtsVendorOf(rawUrl) {
+  const vendor = atsVendorOf(rawUrl);
+  return VENDOR_ANALYSIS_SCOPE.includes(vendor) ? vendor : null;
+}
+
 // Statuses that count as a submitted application for channel-yield analysis.
 // 'evaluated' was never sent, 'skip' is self-filtered, and 'discarded' (withdrawn
 // or the posting closed) proves neither a submission nor an answer — the same
@@ -1308,7 +1319,7 @@ function analyze() {
       report: reportData,
       remoteBucket: classifyRemote(remoteSource),
       companySize: classifyCompanySize(teamSource),
-      vendor: atsVendorOf(reportData?.url),
+      vendor: knownAtsVendorOf(reportData?.url),
     };
   });
 
@@ -1416,7 +1427,7 @@ function analyze() {
 
   const identifiedCount = submitted.length - (vendorMap.get('unknown')?.total || 0);
   const vendorAnalysis = {
-    scope: ['greenhouse', 'lever', 'ashby', 'workday', 'icims'],
+    scope: [...VENDOR_ANALYSIS_SCOPE],
     minSampleForClaim: MIN_VENDOR_N,
     submitted: submitted.length,
     identified: identifiedCount,
