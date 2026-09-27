@@ -292,6 +292,7 @@ const SYSTEM_PATHS = [
   'tracker-utils.mjs',
   'tracker-parse.mjs',
   'tracker-aliases.json',
+  'session-activity.mjs',
   'set-status.mjs',
   'set-status-tests.mjs',
   'mark-pdf-ready.mjs',

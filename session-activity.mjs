@@ -71,18 +71,23 @@ function readSentinel(path) {
 }
 
 function processIsAlive(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   try {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    return err?.code === 'EPERM';
+    if (err?.code === 'ESRCH') return false;
+    return err?.code === 'EPERM' ? true : null;
   }
 }
 
 function isStale(entry, path, ttlMs) {
   if (!entry) return true;
-  if (entry.pid && processIsAlive(entry.pid)) return false;
+  if (entry.pid) {
+    const alive = processIsAlive(entry.pid);
+    if (alive === true) return false;
+    if (entry.process_bound === true && alive === false) return true;
+  }
   try {
     return Date.now() - statSync(path).mtimeMs > ttlMs;
   } catch {
@@ -132,6 +137,7 @@ export function claimActivity(key, options = {}) {
     key: String(key),
     token,
     pid: process.pid,
+    process_bound: options.processBound === true,
     label: options.label || null,
     claimed_at: new Date().toISOString(),
   };

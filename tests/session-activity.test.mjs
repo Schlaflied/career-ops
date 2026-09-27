@@ -152,6 +152,59 @@ test('a stale claim (dead pid) is not active, and can be reclaimed', () => {
   }
 });
 
+test('a fresh CLI claim survives its creator PID exiting until TTL expiry', () => {
+  const activityDir = mkdtempSync(join(tmpdir(), 'session-activity-'));
+  try {
+    const path = sentinelPathFor(activityDir, 'report:cli');
+    writeFileSync(path, JSON.stringify({
+      key: 'report:cli',
+      token: 'cli-token',
+      pid: 999_999_997,
+      process_bound: false,
+      label: null,
+      claimed_at: new Date().toISOString(),
+    }));
+
+    const check = checkActivity('report:cli', { activityDir, ttlMs: 60_000 });
+    assert.equal(check.active, true);
+    assert.equal(check.owner.token, 'cli-token');
+  } finally {
+    rmSync(activityDir, { recursive: true, force: true });
+  }
+});
+
+test('a process-bound claim expires immediately when its PID is confirmed dead', () => {
+  const activityDir = mkdtempSync(join(tmpdir(), 'session-activity-'));
+  try {
+    const path = sentinelPathFor(activityDir, 'report:process');
+    writeFileSync(path, JSON.stringify({
+      key: 'report:process',
+      token: 'process-token',
+      pid: 999_999_996,
+      process_bound: true,
+      label: null,
+      claimed_at: new Date().toISOString(),
+    }));
+
+    assert.equal(checkActivity('report:process', { activityDir, ttlMs: 60_000 }).active, false);
+    assert.equal(claimActivity('report:process', { activityDir, ttlMs: 60_000 }).claimed, true);
+  } finally {
+    rmSync(activityDir, { recursive: true, force: true });
+  }
+});
+
+test('claimActivity persists whether a claim is process-bound', () => {
+  const activityDir = mkdtempSync(join(tmpdir(), 'session-activity-'));
+  try {
+    const ordinary = claimActivity('report:ordinary', { activityDir });
+    const bound = claimActivity('report:bound', { activityDir, processBound: true });
+    assert.equal(ordinary.owner.process_bound, false);
+    assert.equal(bound.owner.process_bound, true);
+  } finally {
+    rmSync(activityDir, { recursive: true, force: true });
+  }
+});
+
 test('a claim past its TTL (no live pid recorded) is not active, and can be reclaimed', () => {
   const activityDir = mkdtempSync(join(tmpdir(), 'session-activity-'));
   try {

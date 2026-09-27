@@ -593,11 +593,9 @@ const note = flags.note != null ? cell(flags.note) : null;
 // report link. Skipped entirely on --dry-run, matching the JD-archive-style
 // triggers elsewhere in this file: a preview claims nothing.
 //
-// A claim left behind by an early failWith()/process.exit() earlier in this
-// file (the mismatch/role-mismatch guards above) is not explicitly released,
-// but that is safe by construction: checkActivity/claimActivity both treat a
-// sentinel whose owning PID is no longer alive as inactive, so the next
-// session to look at this key sees it as free rather than permanently stuck.
+// This claim is process-bound because set-status releases it in this same
+// process's finally block. A confirmed-dead PID can therefore reclaim a claim
+// left behind by an early process exit; raw CLI claims remain TTL-bound.
 let activityClaim = null;
 if (!flags.dryRun) {
   const activityReportNums = extractTrackerReportNumbers(target.report, target.notes);
@@ -605,7 +603,10 @@ if (!flags.dryRun) {
     ? `report:${activityReportNums[0]}`
     : `tracker-row:${normalizeCompany(target.company)}|${target.role}`;
   try {
-    const claim = claimActivity(activityKey, { label: `set-status → ${newStatus}` });
+    const claim = claimActivity(activityKey, {
+      label: `set-status → ${newStatus}`,
+      processBound: true,
+    });
     if (claim.claimed) {
       activityClaim = { key: activityKey, token: claim.token };
     } else if (claim.owner) {
