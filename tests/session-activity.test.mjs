@@ -15,6 +15,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import {
   checkActivity, claimActivity, releaseActivity, gcStaleActivity, describeActiveOwner,
 } from '../session-activity.mjs';
@@ -28,6 +29,13 @@ function sandbox() {
 function sentinelPathFor(activityDir, key) {
   const hash = createHash('sha1').update(String(key)).digest('hex');
   return join(activityDir, `${hash}.json`);
+}
+
+function exitedProcessPid() {
+  const child = spawnSync(process.execPath, ['-e', 'process.exit(0)']);
+  assert.equal(child.status, 0);
+  assert.ok(Number.isSafeInteger(child.pid) && child.pid > 0);
+  return child.pid;
 }
 
 test('claimActivity succeeds when nothing is claimed, returning a token', () => {
@@ -155,11 +163,12 @@ test('a stale claim (dead pid) is not active, and can be reclaimed', () => {
 test('a fresh CLI claim survives its creator PID exiting until TTL expiry', () => {
   const activityDir = mkdtempSync(join(tmpdir(), 'session-activity-'));
   try {
+    const deadPid = exitedProcessPid();
     const path = sentinelPathFor(activityDir, 'report:cli');
     writeFileSync(path, JSON.stringify({
       key: 'report:cli',
       token: 'cli-token',
-      pid: 999_999_997,
+      pid: deadPid,
       process_bound: false,
       label: null,
       claimed_at: new Date().toISOString(),
@@ -176,11 +185,12 @@ test('a fresh CLI claim survives its creator PID exiting until TTL expiry', () =
 test('a process-bound claim expires immediately when its PID is confirmed dead', () => {
   const activityDir = mkdtempSync(join(tmpdir(), 'session-activity-'));
   try {
+    const deadPid = exitedProcessPid();
     const path = sentinelPathFor(activityDir, 'report:process');
     writeFileSync(path, JSON.stringify({
       key: 'report:process',
       token: 'process-token',
-      pid: 999_999_996,
+      pid: deadPid,
       process_bound: true,
       label: null,
       claimed_at: new Date().toISOString(),
