@@ -70,7 +70,7 @@ Recipe tests live beside the recipe and are intentionally not discovered by
 hand after modifying the parser:
 
 ```bash
-node --test docs/recipes/gojobs/parse-gojobs-html.test.mjs
+node --test docs/recipes/gojobs/parse-gojobs-html.manual-test.mjs
 ```
 
 Every `.mjs` file in the repository still participates in the standard

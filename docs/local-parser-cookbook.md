@@ -76,9 +76,10 @@ The scanner only needs stdout. If a parser also writes full JSON snapshots for d
 
 ## Recipes
 
-Site-specific examples live under [`docs/recipes/`](recipes/). They are not
-core integrations: copy the parser you want into `local/`, review it, and point
-your private `portals.yml` entry at that copy. The
+Optional site-specific examples live under [`docs/recipes/`](recipes/). These
+recipes are documentation examples, not bundled core integrations; copy the
+parser you want into `local/`, review it, and point your private `portals.yml`
+entry at that local copy. The
 [Ontario GO Jobs recipe](recipes/gojobs/) demonstrates a deliberately offline
 workflow for HTML saved after a normal browser session; it never automates or
 bypasses the site's interactive challenge.
