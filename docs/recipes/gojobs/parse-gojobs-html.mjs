@@ -7,11 +7,29 @@
  */
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'path';
-import { isMainModule } from './lib/is-main-module.mjs';
-import { getCareerOpsRoot } from './path-resolver.mjs';
+import { pathToFileURL } from 'url';
 
 const ORIGIN = 'https://www.gojobs.gov.on.ca';
 const CAPTCHA = ['radware captcha page', 'botmanager_support', 'validate.perfdrive.com'];
+
+// Keep this recipe self-contained: users copy this file to local/, where core
+// module-relative imports would no longer resolve. The local-parser provider
+// launches scripts with the career-ops checkout as cwd.
+function getCareerOpsRoot() {
+  const env = process.env.CAREER_OPS_ROOT?.trim() || process.env.CAREER_OPS_DATA_DIR?.trim();
+  if (env) return resolve(process.cwd(), env);
+  const marker = join(process.cwd(), '.career-ops-data');
+  if (existsSync(marker)) {
+    const configured = readFileSync(marker, 'utf8').trim();
+    if (configured) return resolve(process.cwd(), configured);
+  }
+  return process.cwd();
+}
+
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  return pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
+}
 
 function decodeEntities(value) {
   const named = new Map([['amp', '&'], ['apos', "'"], ['gt', '>'], ['lt', '<'], ['nbsp', ' '], ['quot', '"']]);
@@ -125,4 +143,4 @@ function main() {
   catch (error) { console.error(`GO Jobs parser: ${error.message}`); process.exitCode = 1; }
 }
 
-if (isMainModule(import.meta.url)) main();
+if (isMainModule()) main();

@@ -4,15 +4,15 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
-import { parseFiles, parseSavedHtml } from '../parse-gojobs-html.mjs';
+import { parseFiles, parseSavedHtml } from './parse-gojobs-html.mjs';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/gojobs-search-results.html', import.meta.url));
-const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const RECIPE_ROOT = fileURLToPath(new URL('.', import.meta.url));
 
 test('parses English rows from legacy and current ASP.NET control prefixes', () => {
   const previousRoot = process.env.CAREER_OPS_ROOT;
   try {
-    process.env.CAREER_OPS_ROOT = REPO_ROOT;
+    process.env.CAREER_OPS_ROOT = RECIPE_ROOT;
     assert.deepEqual(parseFiles([FIXTURE]), [
       { title: 'Learning Systems Specialist', url: 'https://www.gojobs.gov.on.ca/Preview.aspx?JobID=249065&Language=English', company: 'Ministry of Example Services', location: 'Toronto, Toronto Region', closingDate: 'Friday, September 18, 2026 11:59 pm EDT', jobId: '249065' },
       { title: 'Data & Reporting Analyst', url: 'https://www.gojobs.gov.on.ca/Preview.aspx?JobID=249066&Language=English', company: 'Ontario Public Service', location: 'London, West Region', closingDate: 'Monday, September 21, 2026 11:59 pm EDT', jobId: '249066' },
