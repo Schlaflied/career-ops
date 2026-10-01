@@ -247,14 +247,16 @@ test('gcStaleActivity removes a stale sentinel but leaves a live one alone', () 
     const live = claimActivity('report:live', { activityDir });
     assert.equal(live.claimed, true);
 
-    // Stale claim: dead pid. Needs the same negative-ttlMs override as the
-    // isStale tests above — a dead pid alone isn't enough on a freshly
-    // written (age ~0) sentinel; see isStale() in session-activity.mjs.
+    // Stale claim: no process identity, so GC must use the TTL path. A
+    // negative ttlMs makes expiry unconditional without relying on
+    // platform-specific PID probing; process-bound dead-PID cleanup is covered
+    // separately above with a real exited child process.
     const stalePath = sentinelPathFor(activityDir, 'report:stale');
     writeFileSync(stalePath, JSON.stringify({
       key: 'report:stale',
       token: 'stale-token',
-      pid: 999_999_998,
+      pid: null,
+      process_bound: false,
       label: null,
       claimed_at: new Date().toISOString(),
     }));
