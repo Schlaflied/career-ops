@@ -37,12 +37,12 @@ function sandbox({ status = 'Evaluated', url = 'https://boards.greenhouse.io/acm
   return dir;
 }
 
-function setStatus(dir, args, { codeRoot = ROOT } = {}) {
+function setStatus(dir, args, { codeRoot = ROOT, env = {} } = {}) {
   const r = spawnSync(process.execPath, [join(codeRoot, 'set-status.mjs'), ...args], {
     cwd: ROOT,
     encoding: 'utf-8',
     timeout: 30_000,
-    env: { ...process.env, CAREER_OPS_TRACKER: join(dir, 'data', 'applications.md') },
+    env: { ...process.env, CAREER_OPS_TRACKER: join(dir, 'data', 'applications.md'), ...env },
   });
   assert.equal(r.error, undefined, `spawn failed: ${r.error?.message}`);
   return { ...r, all: `${r.stdout ?? ''}${r.stderr ?? ''}` };
@@ -64,6 +64,7 @@ function fakeArchiveCodeRoot() {
   writeFileSync(join(codeRoot, 'archive-posting.mjs'), [
     "import { writeFileSync } from 'node:fs';",
     "import { join } from 'node:path';",
+    "if (process.env.FAKE_ARCHIVE_HANG === '1') Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);",
     "console.log('child stdout must not contaminate JSON');",
     "writeFileSync(join(process.env.CAREER_OPS_ROOT, 'archive-invocation.json'), JSON.stringify({ args: process.argv.slice(2), root: process.env.CAREER_OPS_ROOT }));",
   ].join('\n'));
@@ -134,8 +135,31 @@ test('archive uses the validated path number, keeps JSON stdout pure, and inheri
     assert.equal(result.jdArchiveTriggered?.attempted, true);
     assert.doesNotMatch(raw.stdout, /child stdout/, 'child output leaked into JSON stdout');
     const invocation = JSON.parse(readFileSync(join(dir, 'archive-invocation.json'), 'utf-8'));
-    assert.deepEqual(invocation.args, ['--report=8', 'https://boards.greenhouse.io/acme/jobs/1']);
+    assert.deepEqual(invocation.args, ['--report=8', '--company=Acme', 'https://boards.greenhouse.io/acme/jobs/1']);
     assert.equal(invocation.root, dir);
+  } finally {
+    cleanup(dir);
+    rmSync(codeRoot, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test('a hung archive child times out and remains warn-only', () => {
+  const dir = sandbox();
+  const codeRoot = fakeArchiveCodeRoot();
+  writeFileSync(join(dir, 'reports', '007-acme-2026-02-01.md'), '# Eval\n\n## Job Description\n\nTBD\n');
+  try {
+    const raw = setStatus(dir, ['--row', '7', 'Interview', '--json'], {
+      codeRoot,
+      env: {
+        FAKE_ARCHIVE_HANG: '1',
+        CAREER_OPS_JD_ARCHIVE_TIMEOUT_MS: '100',
+      },
+    });
+    assert.equal(raw.status, 0, raw.all);
+    const result = JSON.parse(raw.stdout);
+    assert.equal(result.changed, true, 'the status transition must survive an archive timeout');
+    assert.equal(result.jdArchiveTriggered?.attempted, true);
+    assert.match(result.jdArchiveTriggered?.error ?? '', /timed out|ETIMEDOUT/i);
   } finally {
     cleanup(dir);
     rmSync(codeRoot, { recursive: true, force: true, maxRetries: 10 });

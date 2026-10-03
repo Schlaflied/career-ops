@@ -128,6 +128,10 @@ import { captureSlug, findCaptureForReport } from './jd-capture.mjs';
 const CODE_ROOT = dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = getCareerOpsRoot();
 const STATES_FILE = join(CODE_ROOT, 'templates/states.yml');
+const JD_ARCHIVE_TIMEOUT_MS = Math.min(
+  300_000,
+  Math.max(100, Number(process.env.CAREER_OPS_JD_ARCHIVE_TIMEOUT_MS) || 120_000),
+);
 
 // LOCK_TIMEOUT is not destructured here — that exit path is raised inside
 // acquireTrackerLockForCli() itself (tracker-utils.mjs), via CLI_EXIT.LOCK_TIMEOUT.
@@ -875,11 +879,17 @@ if (statusChanged && newStatus === 'Interview' && !flags.dryRun) {
         if (!flags.json) console.log(`📄 No JD archived for #${target.num} yet — archiving report ${reportNum} now, before the posting can close:`);
         execFileSync(
           process.execPath,
-          [join(CODE_ROOT, 'archive-posting.mjs'), `--report=${reportNum}`, target.url],
+          [
+            join(CODE_ROOT, 'archive-posting.mjs'),
+            `--report=${reportNum}`,
+            `--company=${target.company}`,
+            target.url,
+          ],
           {
             // stdout is a protocol surface under --json: capture child
             // progress so the parent emits exactly one JSON document.
             stdio: flags.json ? ['ignore', 'pipe', 'inherit'] : 'inherit',
+            timeout: JD_ARCHIVE_TIMEOUT_MS,
             // Keep the capture beside the selected tracker even when
             // CAREER_OPS_TRACKER redirects it outside the checkout.
             env: { ...process.env, CAREER_OPS_ROOT: workspaceRoot },
@@ -891,8 +901,14 @@ if (statusChanged && newStatus === 'Interview' && !flags.dryRun) {
       jdArchiveTriggered = { attempted: false, reason: alreadyEmbedded ? 'already-embedded' : 'already-captured' };
     }
   } catch (err) {
-    jdArchiveTriggered = { attempted: true, error: err.message };
-    console.warn(`⚠ JD archive trigger failed (status change itself succeeded): ${err.message}`);
+    const archiveTimedOut = err?.code === 'ETIMEDOUT'
+      || err?.errno === 'ETIMEDOUT'
+      || err?.signal === 'SIGTERM';
+    const archiveError = archiveTimedOut
+      ? `JD archive timed out after ${JD_ARCHIVE_TIMEOUT_MS}ms`
+      : err.message;
+    jdArchiveTriggered = { attempted: true, error: archiveError };
+    console.warn(`⚠ JD archive trigger failed (status change itself succeeded): ${archiveError}`);
   }
 }
 
