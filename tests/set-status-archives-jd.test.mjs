@@ -16,7 +16,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -136,7 +136,9 @@ test('archive uses the validated path number, keeps JSON stdout pure, and inheri
     assert.doesNotMatch(raw.stdout, /child stdout/, 'child output leaked into JSON stdout');
     const invocation = JSON.parse(readFileSync(join(dir, 'archive-invocation.json'), 'utf-8'));
     assert.deepEqual(invocation.args, ['--report=8', '--company=Acme', 'https://boards.greenhouse.io/acme/jobs/1']);
-    assert.equal(invocation.root, dir);
+    // macOS exposes /var as the /private/var symlink target in child-process
+    // real paths. Compare filesystem identity rather than path spelling.
+    assert.equal(realpathSync(invocation.root), realpathSync(dir));
   } finally {
     cleanup(dir);
     rmSync(codeRoot, { recursive: true, force: true, maxRetries: 10 });
