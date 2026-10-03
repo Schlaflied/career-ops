@@ -28,7 +28,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getCareerOpsRoot } from './path-resolver.mjs';
-import { reportPrefix } from './jd-capture.mjs';
+import { captureSlug, reportPrefix } from './jd-capture.mjs';
 import { rejectPrivateOrInvalid, validateUrlSecurity } from './liveness-browser.mjs';
 import { validateFlags } from './lib/cli-flags.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
@@ -172,15 +172,6 @@ function parseCliArgs(args) {
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
-function slugify(text) {
-  return text
-    .toLowerCase()
-    .replace(/[^\w\s-]/g, '')
-    .replace(/[\s_]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
-}
-
 // The LOCAL calendar day. This names the capture file, and AGENTS.md is explicit
 // that a date-named capture "stops resolving the day after it is written" -- with
 // the UTC day an evening run west of Greenwich writes TOMORROW's date, so the
@@ -195,7 +186,7 @@ function today() {
  * the scraped company/role all change between runs, the report number does not.
  */
 function captureFilename(company, role) {
-  const base = `${today()}_${slugify(company)}_${slugify(role)}.pdf`;
+  const base = `${today()}_${captureSlug(company)}_${captureSlug(role)}.pdf`;
   return reportNum ? `${reportPrefix(reportNum)}-${base}` : base;
 }
 

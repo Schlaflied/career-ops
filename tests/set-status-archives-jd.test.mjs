@@ -6,20 +6,17 @@
 // last resort once the posting has closed is "ask the user to paste the JD
 // text instead" — which fails if the user never kept a copy either.
 //
-// This exercises only the GATING logic (already-embedded / already-captured /
-// no-url / no-report-number / wrong-transition / dry-run), never the actual
-// archive-posting.mjs → Chromium → live-network path: no test file in this
-// repo runs that path (archive-posting.mjs has no dedicated test suite of its
-// own), and a unit test that launched a real browser against a real URL would
-// be flaky and slow for no benefit — the gating is exactly what determines
-// whether that subprocess is ever spawned, so it is what needs proving here.
+// This exercises the gating logic and the child-process boundary. Archive
+// attempts use a copied code root with a deterministic archive-posting probe,
+// so report-number selection, workspace propagation, and JSON stdout purity
+// are covered without launching Chromium or making a live network request.
 //
 // Run:  node --test tests/set-status-archives-jd.test.mjs
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,8 +37,8 @@ function sandbox({ status = 'Evaluated', url = 'https://boards.greenhouse.io/acm
   return dir;
 }
 
-function setStatus(dir, args) {
-  const r = spawnSync(process.execPath, [join(ROOT, 'set-status.mjs'), ...args], {
+function setStatus(dir, args, { codeRoot = ROOT } = {}) {
+  const r = spawnSync(process.execPath, [join(codeRoot, 'set-status.mjs'), ...args], {
     cwd: ROOT,
     encoding: 'utf-8',
     timeout: 30_000,
@@ -49,6 +46,28 @@ function setStatus(dir, args) {
   });
   assert.equal(r.error, undefined, `spawn failed: ${r.error?.message}`);
   return { ...r, all: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+}
+
+function fakeArchiveCodeRoot() {
+  // Copy the set-status import closure under the real repo so bare package
+  // imports still resolve from ROOT/node_modules, then replace only the
+  // archive executable with a deterministic no-network probe.
+  const codeRoot = mkdtempSync(join(ROOT, '.tmp-set-status-archive-'));
+  for (const sub of ['lib', 'templates']) mkdirSync(join(codeRoot, sub), { recursive: true });
+  for (const file of [
+    'set-status.mjs', 'path-resolver.mjs', 'tracker-utils.mjs', 'pipeline-lock.mjs',
+    'tracker-parse.mjs', 'lib/local-today.mjs', 'role-matcher.mjs',
+    'session-activity.mjs', 'lib/is-main-module.mjs', 'check-jd-archive.mjs',
+    'jd-capture.mjs', 'lib/cli-flags.mjs', 'templates/states.yml',
+    'tracker-aliases.json',
+  ]) copyFileSync(join(ROOT, file), join(codeRoot, file));
+  writeFileSync(join(codeRoot, 'archive-posting.mjs'), [
+    "import { writeFileSync } from 'node:fs';",
+    "import { join } from 'node:path';",
+    "console.log('child stdout must not contaminate JSON');",
+    "writeFileSync(join(process.env.CAREER_OPS_ROOT, 'archive-invocation.json'), JSON.stringify({ args: process.argv.slice(2), root: process.env.CAREER_OPS_ROOT }));",
+  ].join('\n'));
+  return codeRoot;
 }
 
 const jsonOf = (r) => JSON.parse(r.stdout.slice(r.stdout.indexOf('{')));
@@ -65,6 +84,17 @@ test('an already-embedded JD is never re-archived', () => {
   } finally { cleanup(dir); }
 });
 
+test('a plain report path resolves before the embedded-JD check', () => {
+  const dir = sandbox({ reportCell: '../reports/007-acme-2026-02-01.md' });
+  writeFileSync(join(dir, 'reports', '007-acme-2026-02-01.md'),
+    '# Eval\n\n## Job Description\n\nWe are looking for a Backend Engineer to own our platform services and production reliability end to end.\n');
+  try {
+    const r = JSON.parse(setStatus(dir, ['--row', '7', 'Interview', '--json']).stdout);
+    assert.equal(r.jdArchiveTriggered?.attempted, false);
+    assert.equal(r.jdArchiveTriggered?.reason, 'already-embedded');
+  } finally { cleanup(dir); }
+});
+
 test('an already-captured JD (jds/ has a matching file) is never re-archived', () => {
   const dir = sandbox();
   writeFileSync(join(dir, 'reports', '007-acme-2026-02-01.md'), '# Eval\n\n## Job Description (archived verbatim)\n\nTBD\n');
@@ -75,6 +105,41 @@ test('an already-captured JD (jds/ has a matching file) is never re-archived', (
     assert.equal(r.jdArchiveTriggered?.attempted, false);
     assert.equal(r.jdArchiveTriggered?.reason, 'already-captured');
   } finally { cleanup(dir); }
+});
+
+test('a same-number capture for another company does not suppress archiving', () => {
+  const dir = sandbox();
+  const codeRoot = fakeArchiveCodeRoot();
+  writeFileSync(join(dir, 'reports', '007-acme-2026-02-01.md'), '# Eval\n\n## Job Description\n\nTBD\n');
+  mkdirSync(join(dir, 'jds'), { recursive: true });
+  writeFileSync(join(dir, 'jds', '007-globex.pdf'), 'belongs to another company');
+  try {
+    const raw = setStatus(dir, ['--row', '7', 'Interview', '--json'], { codeRoot });
+    const result = JSON.parse(raw.stdout);
+    assert.equal(result.jdArchiveTriggered?.attempted, true);
+    assert.doesNotMatch(raw.stdout, /child stdout/, 'child output leaked into JSON stdout');
+  } finally {
+    cleanup(dir);
+    rmSync(codeRoot, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test('archive uses the validated path number, keeps JSON stdout pure, and inherits the tracker workspace', () => {
+  const dir = sandbox({ reportCell: '[999](../reports/008-acme-2026-02-01.md)' });
+  const codeRoot = fakeArchiveCodeRoot();
+  writeFileSync(join(dir, 'reports', '008-acme-2026-02-01.md'), '# Eval\n\n## Job Description\n\nTBD\n');
+  try {
+    const raw = setStatus(dir, ['--row', '7', 'Interview', '--json'], { codeRoot });
+    const result = JSON.parse(raw.stdout);
+    assert.equal(result.jdArchiveTriggered?.attempted, true);
+    assert.doesNotMatch(raw.stdout, /child stdout/, 'child output leaked into JSON stdout');
+    const invocation = JSON.parse(readFileSync(join(dir, 'archive-invocation.json'), 'utf-8'));
+    assert.deepEqual(invocation.args, ['--report=8', 'https://boards.greenhouse.io/acme/jobs/1']);
+    assert.equal(invocation.root, dir);
+  } finally {
+    cleanup(dir);
+    rmSync(codeRoot, { recursive: true, force: true, maxRetries: 10 });
+  }
 });
 
 test('a row with no URL is not attempted', () => {

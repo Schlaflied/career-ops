@@ -100,7 +100,7 @@
  */
 
 import { readFileSync, existsSync, appendFileSync } from 'fs';
-import { join, dirname, resolve, sep } from 'path';
+import { join, dirname, resolve, sep, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
 import { extractTrackerReportNumbers, resolveColumns, parseTrackerRow, normalizeTextKey } from './tracker-parse.mjs';
@@ -113,7 +113,7 @@ import {
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { claimActivity, releaseActivity, describeActiveOwner } from './session-activity.mjs';
 import { hasEmbeddedJdArchive } from './check-jd-archive.mjs';
-import { findCaptureForReport } from './jd-capture.mjs';
+import { captureSlug, findCaptureForReport } from './jd-capture.mjs';
 
 // Two roots. CODE_ROOT holds templates/states.yml, which ships with the code;
 // DATA_ROOT is the user's, and getCareerOpsRoot() is the only thing that honours
@@ -827,8 +827,6 @@ if (statusChanged && newStatus === 'Applied') {
 let jdArchiveTriggered = null;
 if (statusChanged && newStatus === 'Interview' && !flags.dryRun) {
   try {
-    const reportNums = extractTrackerReportNumbers(target.report, target.notes);
-    const reportNum = reportNums[0] ?? null;
     const workspaceRoot = resolveWorkspaceRoot(APPS_FILE);
     const reportsDir = join(workspaceRoot, 'reports');
     const jdsDir = join(workspaceRoot, 'jds');
@@ -842,16 +840,30 @@ if (statusChanged && newStatus === 'Interview' && !flags.dryRun) {
     // stripped and the remainder resolved against the WORKSPACE root, not
     // reportsDir itself — resolving "../reports/x.md" against reportsDir would
     // double the "reports" segment.
-    const linkMatch = String(target.report ?? '').match(/\]\(([^)]+)\)/);
+    const reportCell = String(target.report ?? '').trim();
+    const linkMatch = reportCell.match(/\]\(([^)]+)\)/);
+    const rawReportPath = (linkMatch?.[1] ?? reportCell).trim().replace(/^<|>$/g, '');
     let reportPath = null;
-    if (linkMatch) {
-      const candidate = resolve(workspaceRoot, linkMatch[1].trim().replace(/^(\.\.\/)+/, ''));
+    if (rawReportPath && rawReportPath !== '—' && rawReportPath !== '-') {
+      const normalized = rawReportPath.replace(/\\/g, '/').replace(/^(\.\.\/)+/, '');
+      const candidate = resolve(normalized.includes('/') ? workspaceRoot : reportsDir, normalized);
       if (candidate.startsWith(reportsDir + sep) && existsSync(candidate)) reportPath = candidate;
     }
 
+    // A Markdown label is presentation, not identity: `[7](.../008-acme.md)`
+    // belongs to report 8. Once the path has passed containment + existence,
+    // its filename is authoritative for the embedded-JD check and archive.
+    const reportPathNum = reportPath
+      ? Number.parseInt(/^([0-9]+)-/.exec(basename(reportPath))?.[1] ?? '', 10)
+      : NaN;
+    const reportNums = extractTrackerReportNumbers(target.report, target.notes);
+    const reportNum = Number.isInteger(reportPathNum) && reportPathNum > 0
+      ? reportPathNum
+      : (reportNums[0] ?? null);
+
     const alreadyEmbedded = reportPath ? hasEmbeddedJdArchive(readFileSync(reportPath, 'utf-8')) : false;
     const alreadyCaptured = !alreadyEmbedded && reportNum != null && existsSync(jdsDir)
-      ? findCaptureForReport(jdsDir, reportNum) !== null
+      ? findCaptureForReport(jdsDir, reportNum, { companySlug: captureSlug(target.company) }) !== null
       : false;
 
     if (!alreadyEmbedded && !alreadyCaptured) {
@@ -864,7 +876,14 @@ if (statusChanged && newStatus === 'Interview' && !flags.dryRun) {
         execFileSync(
           process.execPath,
           [join(CODE_ROOT, 'archive-posting.mjs'), `--report=${reportNum}`, target.url],
-          { stdio: 'inherit' },
+          {
+            // stdout is a protocol surface under --json: capture child
+            // progress so the parent emits exactly one JSON document.
+            stdio: flags.json ? ['ignore', 'pipe', 'inherit'] : 'inherit',
+            // Keep the capture beside the selected tracker even when
+            // CAREER_OPS_TRACKER redirects it outside the checkout.
+            env: { ...process.env, CAREER_OPS_ROOT: workspaceRoot },
+          },
         );
         jdArchiveTriggered = { attempted: true };
       }
