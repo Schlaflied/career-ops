@@ -50,9 +50,8 @@ function makeFakeBrowser({ bodyText, title = 'Backend Engineer | Acme', h1 = 'Ba
     // controlled fixture text — testing archiveUrl()'s reaction to the
     // extracted text is the point here, not Playwright's own extraction.
     // evaluateRejects simulates a real extraction failure (the page
-    // navigating away, a detached frame, etc.) so the test exercises
-    // archiveUrl()'s actual `.catch(() => '')` fallback, not just a fixture
-    // that happens to already be an empty string.
+    // navigating away, a detached frame, etc.) so the test verifies that
+    // archiveUrl() fails closed instead of archiving uninspected content.
     async evaluate() {
       if (evaluateRejects) throw new Error('fake: page.evaluate() failed (simulated extraction failure)');
       return bodyText;
