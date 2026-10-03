@@ -92,6 +92,27 @@ test('a 404 shell is refused, not archived', async () => {
   assert.equal(pdfCalled(), false);
 });
 
+test('an empty rendered page is refused before metadata fallbacks can archive it', async () => {
+  const { browser, pdfCalled } = makeFakeBrowser({ bodyText: '   \n\t  ' });
+  await assert.rejects(
+    () => archiveUrl(browser, 'https://boards.greenhouse.io/acme/jobs/empty', {}),
+    /refusing to archive.*no visible text/i,
+  );
+  assert.equal(pdfCalled(), false, 'an empty page must never reach page.pdf()');
+});
+
+test('an HTTP 404 with an unrecognized shell is refused before PDF generation', async () => {
+  const { browser, pdfCalled } = makeFakeBrowser({
+    bodyText: 'This page is unavailable.',
+    httpStatus: 404,
+  });
+  await assert.rejects(
+    () => archiveUrl(browser, 'https://boards.greenhouse.io/acme/jobs/missing', {}),
+    /refusing to archive.*HTTP 404/i,
+  );
+  assert.equal(pdfCalled(), false, 'an unrecognized 404 shell must never reach page.pdf()');
+});
+
 test('a real posting is archived normally (control)', async () => {
   const { browser, pdfCalled } = makeFakeBrowser({
     bodyText: 'We are looking for a Senior Backend Engineer to join our platform team and own the checkout service end to end. Requirements: 5+ years experience.',

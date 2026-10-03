@@ -387,6 +387,9 @@ export async function archiveUrl(browser, url, { company: companyHint, role: rol
     // this block exists to add. Fail closed: propagate the error, refusing
     // to archive rather than archiving blind.
     const bodyText = await page.evaluate(() => document.body?.innerText ?? '');
+    if (!bodyText.trim()) {
+      throw new Error('refusing to archive: page has no visible text');
+    }
     const nonContentMarker = bodyText.length <= NON_CONTENT_PAGE_MAX_CHARS
       ? detectNonContentMarker(bodyText)
       : null;
@@ -406,6 +409,9 @@ export async function archiveUrl(browser, url, { company: companyHint, role: rol
 
     console.log(`   Company: ${company}`);
     console.log(`   Role:    ${role}`);
+    if (httpStatus === 404) {
+      throw new Error('refusing to archive: HTTP 404');
+    }
     if (httpStatus && httpStatus >= 400) {
       console.log(`HTTP ${httpStatus} — page may be closed, archiving anyway`);
     }
