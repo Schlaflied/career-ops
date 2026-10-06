@@ -430,6 +430,12 @@ function comparableDateRange(raw) {
     ) return null;
     return { earliest: parsed, latest: parsed };
   }
+  // ISO date-times without an explicit zone parse in the host's local time,
+  // which would make eligibility vary across machines. Fail closed instead.
+  if (
+    /^\d{4}-\d{2}-\d{2}T/i.test(value)
+    && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
+  ) return null;
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) return null;
   return { earliest: parsed, latest: parsed };

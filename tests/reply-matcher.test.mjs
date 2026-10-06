@@ -566,6 +566,21 @@ test('matchCandidates - impossible calendar dates fail closed', () => {
   assert.deepEqual(result.application_nums, [56]);
 });
 
+test('matchCandidates - ISO date-times require an explicit timezone', () => {
+  const apps = [
+    { num: 57, date: '2026-08-20', company: 'Acme Air', role: 'Backend Engineer', status: 'Applied', notes: '' },
+    { num: 58, date: '2026-08-19', company: 'Acme Air', role: 'Product Designer', status: 'Applied', notes: '' },
+  ];
+  const run = (received_at) => matchCandidates([{
+    message_id: `company-wide-zone-${received_at}`, received_at, from: 'careers@acmeair.com',
+    subject: 'Acme Air application update', body_snippet: 'We will not be moving forward.', signal: 'rejection',
+  }], apps, [])[0];
+
+  assert.deepEqual(run('2026-08-20T00:30:00').signals, ['ambiguous-match']);
+  assert.deepEqual(run('2026-08-20T00:30:00Z').application_nums, [57, 58]);
+  assert.deepEqual(run('2026-08-20T00:30:00+00:00').application_nums, [57, 58]);
+});
+
 test('matchCandidates - approximate tracker dates are conservative and never crash', () => {
   const apps = [
     { num: 51, date: '~2026-05', company: 'Acme Air', role: 'Backend Engineer', status: 'Applied', notes: '' },
