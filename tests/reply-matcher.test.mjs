@@ -579,6 +579,8 @@ test('matchCandidates - ISO date-times require an explicit timezone', () => {
   assert.deepEqual(run('2026-08-20T00:30:00').signals, ['ambiguous-match']);
   assert.deepEqual(run('2026-08-20T00:30:00Z').application_nums, [57, 58]);
   assert.deepEqual(run('2026-08-20T00:30:00+00:00').application_nums, [57, 58]);
+  assert.deepEqual(run('2026-02-30T00:00:00Z').signals, ['ambiguous-match']);
+  assert.deepEqual(run('2026-02-30T00:00:00+00:00').signals, ['ambiguous-match']);
 });
 
 test('matchCandidates - approximate tracker dates are conservative and never crash', () => {

@@ -416,19 +416,22 @@ function comparableDateRange(raw) {
       latest: Date.UTC(year, month, 1) - 1,
     };
   }
-  const exactDate = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (exactDate) {
-    const year = Number(exactDate[1]);
-    const month = Number(exactDate[2]);
-    const day = Number(exactDate[3]);
-    const parsed = Date.UTC(year, month - 1, day);
-    const date = new Date(parsed);
+  const calendarDate = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/i);
+  let calendarInstant = null;
+  if (calendarDate) {
+    const year = Number(calendarDate[1]);
+    const month = Number(calendarDate[2]);
+    const day = Number(calendarDate[3]);
+    calendarInstant = Date.UTC(year, month - 1, day);
+    const date = new Date(calendarInstant);
     if (
       date.getUTCFullYear() !== year
       || date.getUTCMonth() !== month - 1
       || date.getUTCDate() !== day
     ) return null;
-    return { earliest: parsed, latest: parsed };
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return { earliest: calendarInstant, latest: calendarInstant };
   }
   // ISO date-times without an explicit zone parse in the host's local time,
   // which would make eligibility vary across machines. Fail closed instead.
